@@ -49,6 +49,7 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     func start() {
         guard !isRecording else { return }
+        lastEvaluation = nil
         if keepingAliveForUpload {
             keepingAliveForUpload = false
             keepAliveDeadline?.cancel()
@@ -111,6 +112,10 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// 停止ボタンから呼ぶ。止める直前に同期の合図(光と音)を出し、鳴り終わってから止める
     @Published private(set) var isStopping = false
+    /// 止めたあと、評価を計算している間 true
+    @Published private(set) var isEvaluating = false
+    /// 直前に止めた走行の評価(記録画面に出す)
+    @Published var lastEvaluation: (id: String, eval: Evaluation)?
     func stopWithSync() {
         guard isRecording, !isStopping else { return }
         isStopping = true
@@ -137,18 +142,30 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         altimeter.stopRelativeAltitudeUpdates()
         isRecording = false
         motionQueue.waitUntilAllOperationsAreFinished()
+        var finishedID: String?
         io.sync {
             gpx?.close(); locationCSV?.close(); motionCSV?.close(); pressureCSV?.close()
             gpx = nil; locationCSV = nil; motionCSV = nil; pressureCSV = nil
             if var m = meta {
                 m.end = Date()
                 LogStore.shared.save(m)
+                finishedID = m.id
                 meta = nil
             }
         }
         current = nil
         Beeper.shared.play(.stop)
-        if AppSettings.shared.autoUpload { Uploader.shared.uploadPending() }
+        // 運転評価を計算してから送る(evaluation.json も一緒に送り、地図ですぐ見られるようにする)
+        guard let id = finishedID else {
+            if AppSettings.shared.autoUpload { Uploader.shared.uploadPending() }
+            return
+        }
+        isEvaluating = true
+        LogStore.shared.evaluate(id) { [weak self] e in
+            self?.isEvaluating = false
+            self?.lastEvaluation = e.map { (id, $0) }
+            if AppSettings.shared.autoUpload { Uploader.shared.uploadPending() }
+        }
     }
 
     // MARK: - 送信が終わるまでアプリを起こしておく

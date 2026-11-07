@@ -93,6 +93,7 @@ final class LogStore: ObservableObject {
     }
 
     func delete(_ id: String) {
+        evalCache[id] = nil
         try? FileManager.default.removeItem(at: dir(id))
         reload()
     }
@@ -166,6 +167,61 @@ final class LogStore: ObservableObject {
             if let t = Double(line.split(separator: ",", maxSplits: 1).first ?? "") { return t }
         }
         return nil
+    }
+
+    // MARK: - 運転評価(evaluation.json)
+
+    /// 送る順番。evaluation.json は無ければ飛ばす(前の版の走行や、短すぎて評価できなかった走行)。
+    /// unsent の判定には使わない(評価を足す前に送り終えた走行を、もう一度送らないため)
+    static let uploadFiles = ["location.csv", "motion.csv", "pressure.csv", "evaluation.json", "meta.json"]
+
+    private var evalCache: [String: Evaluation] = [:]
+    /// evaluation.json が無かった走行(一覧を描くたびにファイルを探さないため)
+    private var evalMissing: Set<String> = []
+
+    /// 保存してある評価。無ければ nil
+    func evaluation(_ id: String) -> Evaluation? {
+        if let e = evalCache[id] { return e }
+        if evalMissing.contains(id) { return nil }
+        let url = dir(id).appendingPathComponent("evaluation.json")
+        guard let data = try? Data(contentsOf: url),
+              let e = try? JSONDecoder().decode(Evaluation.self, from: data) else {
+            evalMissing.insert(id)
+            return nil
+        }
+        evalCache[id] = e
+        return e
+    }
+
+    /// 評価を計算して evaluation.json に書く(時間がかかるので、メインスレッドでは呼ばない)
+    @discardableResult
+    static func writeEvaluation(folder: URL) -> Evaluation? {
+        do {
+            let e = try DriveEval.evaluate(folder: folder)
+            let enc = JSONEncoder()
+            enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+            try enc.encode(e).write(to: folder.appendingPathComponent("evaluation.json"), options: .atomic)
+            return e
+        } catch {
+            NSLog("運転評価を計算できませんでした(\(folder.lastPathComponent)): \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    /// 裏で評価を計算し、終わったらメインスレッドで done を呼ぶ
+    func evaluate(_ id: String, done: @escaping (Evaluation?) -> Void) {
+        let folder = dir(id)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let e = LogStore.writeEvaluation(folder: folder)
+            DispatchQueue.main.async {
+                if let e {
+                    self.evalCache[id] = e
+                    self.evalMissing.remove(id)
+                    self.objectWillChange.send()
+                }
+                done(e)
+            }
+        }
     }
 
     /// 送るべきもの(GPX と生データ)が残っている走行

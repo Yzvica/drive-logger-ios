@@ -34,6 +34,12 @@ enum Display {
         f.dateFormat = "yyyy/MM/dd HH:mm"
         return f
     }()
+    static let time: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ja_JP")
+        f.dateFormat = "HH:mm:ss"
+        return f
+    }()
     /// 日付の一覧に出す日付(曜日付き)
     static let day: DateFormatter = {
         let f = DateFormatter()
