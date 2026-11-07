@@ -21,6 +21,13 @@ struct SettingsView: View {
                 } footer: {
                     Text("外出先からは、Tailscale をつないで MiniPC の Tailscale のアドレス(http://100.x.x.x:8080 など)を入れてください。")
                 }
+                Section {
+                    Toggle("急な操作を音で知らせる", isOn: $settings.coachSound)
+                } header: {
+                    Text("記録中のサポート")
+                } footer: {
+                    Text("急ブレーキは下がる音、急加速は上がる音、急ハンドルは短く2回、そのほかの急な操作は短く1回、止まり際のカックンは低い音。音は DJI Mic にも入ります。")
+                }
                 Section("記録") {
                     Picker("加速度などの頻度", selection: $settings.motionHz) {
                         Text("25 Hz").tag(25)

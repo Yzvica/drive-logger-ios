@@ -131,6 +131,7 @@ struct DayLogsView: View {
 
 struct SessionRow: View {
     let meta: SessionMeta
+    @EnvironmentObject var store: LogStore
 
     var body: some View {
         row(meta)
@@ -140,6 +141,7 @@ struct SessionRow: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(Display.date.string(from: meta.start)).font(.headline)
+                if let e = store.evaluation(meta.id) { ScoreBadge(score: e.score) }
                 Spacer()
                 status(meta)
             }
@@ -168,7 +170,7 @@ struct LogDetailView: View {
     var body: some View {
         let meta = store.sessions.first { $0.id == id }
         let dir = store.dir(id)
-        let files = ["track.gpx"] + LogStore.rawFiles
+        let files = ["track.gpx", "location.csv", "motion.csv", "pressure.csv", "evaluation.json", "meta.json"]
         List {
             if let meta {
                 Section("概要") {
@@ -179,6 +181,7 @@ struct LogDetailView: View {
                     LabeledContent("位置の点数", value: "\(meta.points)")
                     LabeledContent("端末", value: "\(meta.device) / iOS \(meta.systemVersion)")
                 }
+                EvalSection(id: meta.id, finished: meta.finished)
                 if !meta.markers.isEmpty {
                     Section("目印") {
                         ForEach(meta.markers, id: \.self) { m in

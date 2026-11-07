@@ -15,6 +15,10 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published private(set) var track: [CLLocationCoordinate2D] = []
     @Published private(set) var authorization: CLAuthorizationStatus = .notDetermined
     @Published var flash = false
+    /// 記録中のサポート(G の点・直近 5 分の点数・出来事の回数)
+    @Published private(set) var coachState = CoachState()
+    /// motionQueue の中だけで使う
+    private var coach: LiveCoach?
 
     private let location = CLLocationManager()
     private let motion = CMMotionManager()
@@ -49,6 +53,13 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     func start() {
         guard !isRecording else { return }
+        lastEvaluation = nil
+        let c = LiveCoach()
+        c.onEvent = { e in
+            DispatchQueue.main.async { if AppSettings.shared.coachSound { Beeper.shared.play(.coach(e)) } }
+        }
+        coach = c
+        coachState = CoachState()
         if keepingAliveForUpload {
             keepingAliveForUpload = false
             keepAliveDeadline?.cancel()
@@ -111,6 +122,10 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// 停止ボタンから呼ぶ。止める直前に同期の合図(光と音)を出し、鳴り終わってから止める
     @Published private(set) var isStopping = false
+    /// 止めたあと、評価を計算している間 true
+    @Published private(set) var isEvaluating = false
+    /// 直前に止めた走行の評価(記録画面に出す)
+    @Published var lastEvaluation: (id: String, eval: Evaluation)?
     func stopWithSync() {
         guard isRecording, !isStopping else { return }
         isStopping = true
@@ -144,18 +159,31 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         isRecording = false
         updateIdleTimer()
         motionQueue.waitUntilAllOperationsAreFinished()
+        var finishedID: String?
         io.sync {
             gpx?.close(); locationCSV?.close(); motionCSV?.close(); pressureCSV?.close()
             gpx = nil; locationCSV = nil; motionCSV = nil; pressureCSV = nil
             if var m = meta {
                 m.end = Date()
                 LogStore.shared.save(m)
+                finishedID = m.id
                 meta = nil
             }
         }
         current = nil
+        coach = nil
         Beeper.shared.play(.stop)
-        if AppSettings.shared.autoUpload { Uploader.shared.uploadPending() }
+        // 運転評価を計算してから送る(evaluation.json も一緒に送り、地図ですぐ見られるようにする)
+        guard let id = finishedID else {
+            if AppSettings.shared.autoUpload { Uploader.shared.uploadPending() }
+            return
+        }
+        isEvaluating = true
+        LogStore.shared.evaluate(id) { [weak self] e in
+            self?.isEvaluating = false
+            self?.lastEvaluation = e.map { (id, $0) }
+            if AppSettings.shared.autoUpload { Uploader.shared.uploadPending() }
+        }
     }
 
     // MARK: - 送信が終わるまでアプリを起こしておく
@@ -234,6 +262,10 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         lastLocation = loc
         let t = loc.timestamp.timeIntervalSince1970
         let speed = loc.speed >= 0 ? loc.speed : nil
+        let coord = loc.coordinate, acc = loc.horizontalAccuracy
+        motionQueue.addOperation {
+            self.coach?.addLocation(t: t, lat: coord.latitude, lon: coord.longitude, speed: speed, accuracy: acc)
+        }
         let line = [
             Fmt.n(t, 3), Fmt.n(loc.coordinate.latitude, 7), Fmt.n(loc.coordinate.longitude, 7),
             loc.verticalAccuracy >= 0 ? Fmt.n(loc.altitude, 2) : "",
@@ -299,6 +331,8 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
                 Fmt.n(q.w, 5), Fmt.n(q.x, 5), Fmt.n(q.y, 5), Fmt.n(q.z, 5), heading,
             ].joined(separator: ",") + "\n"
             self.io.async { self.motionCSV?.append(line) }
+            self.coach?.addMotion(t: dm.timestamp + uptimeToUnix, a: Vec3(a.x, a.y, a.z),
+                                  g: Vec3(g.x, g.y, g.z), r: Vec3(r.x, r.y, r.z))
 
             // 画面に出す横方向の G(重力に垂直な成分の大きさ)。車の向きへの座標合わせは第2段で行う
             let dot = a.x * g.x + a.y * g.y + a.z * g.z
@@ -306,7 +340,11 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
             let hg = (hx * hx + hy * hy + hz * hz).squareRoot()
             if dm.timestamp - self.lastUIUpdate > 0.2 {
                 self.lastUIUpdate = dm.timestamp
-                DispatchQueue.main.async { self.horizontalG = hg }
+                let cs = self.coach?.state
+                DispatchQueue.main.async {
+                    self.horizontalG = hg
+                    if let cs { self.coachState = cs }
+                }
             }
         }
     }

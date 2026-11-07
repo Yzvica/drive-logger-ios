@@ -1,0 +1,92 @@
+{
+ "version": 1,
+ "score": 34.9,
+ "items": [
+  {
+   "key": "sick",
+   "name": "酔いやすさ",
+   "value": 0.542,
+   "score": 12.8,
+   "weight": 0.3,
+   "good": 0.15,
+   "bad": 0.6
+  },
+  {
+   "key": "jerk",
+   "name": "躍度",
+   "value": 1.18,
+   "score": 94.0,
+   "weight": 0.2,
+   "good": 1.0,
+   "bad": 4.0
+  },
+  {
+   "key": "harsh",
+   "name": "急な操作",
+   "value": 9.132,
+   "score": 0.0,
+   "weight": 0.2,
+   "good": 0.0,
+   "bad": 5.0
+  },
+  {
+   "key": "stop",
+   "name": "止まり際",
+   "value": 1.143,
+   "score": 81.6,
+   "weight": 0.15,
+   "good": 0.5,
+   "bad": 4.0
+  },
+  {
+   "key": "curve",
+   "name": "カーブのつなぎ",
+   "value": 5.049,
+   "score": 0.0,
+   "weight": 0.15,
+   "good": 1.0,
+   "bad": 4.0
+  }
+ ],
+ "moving_s": 197.1,
+ "stops": 3,
+ "events": [
+  {
+   "kind": "急ブレーキ",
+   "type": "brake",
+   "value": 0.46,
+   "unit": "G",
+   "t_unix": 1794000063.6,
+   "start_unix": 1794000061.0,
+   "end_unix": 1794000064.2,
+   "lat": 35.0045512,
+   "lon": 139.0048049,
+   "kmh": 21.1
+  },
+  {
+   "kind": "急ハンドル",
+   "type": "steer",
+   "value": 0.558,
+   "unit": "G",
+   "t_unix": 1794000074.9,
+   "start_unix": 1794000074.0,
+   "end_unix": 1794000076.4,
+   "lat": 35.0048219,
+   "lon": 139.0057653,
+   "kmh": 44.0
+  },
+  {
+   "kind": "急ブレーキ",
+   "type": "brake",
+   "value": 0.329,
+   "unit": "G",
+   "t_unix": 1794000099.2,
+   "start_unix": 1794000098.6,
+   "end_unix": 1794000099.8,
+   "lat": 35.0071914,
+   "lon": 139.0069007,
+   "kmh": 21.1
+  }
+ ],
+ "axes_quality": 0.98
+}

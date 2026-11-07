@@ -33,11 +33,16 @@ final class AppSettings: ObservableObject {
     @Published var mapHeadingUp: Bool {
         didSet { UserDefaults.standard.set(mapHeadingUp, forKey: "mapHeadingUp") }
     }
+    /// 記録中、急な操作を音で知らせる
+    @Published var coachSound: Bool {
+        didSet { UserDefaults.standard.set(coachSound, forKey: "coachSound") }
+    }
 
     private init() {
         let d = UserDefaults.standard
         mapStyle = d.string(forKey: "mapStyle").flatMap(MapStyle.init(rawValue:)) ?? .appleStandard
         mapHeadingUp = d.bool(forKey: "mapHeadingUp")
+        coachSound = d.object(forKey: "coachSound") as? Bool ?? true
         serverURL = d.string(forKey: "serverURL") ?? AppSettings.defaultServer
         motionHz = d.object(forKey: "motionHz") as? Int ?? 50
         autoUpload = d.object(forKey: "autoUpload") as? Bool ?? true

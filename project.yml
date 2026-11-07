@@ -26,6 +26,8 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         UIBackgroundModes:
           - location
+          # ほかのアプリを開いているときも、急な操作の音を鳴らす
+          - audio
         NSLocationWhenInUseUsageDescription: 走行の経路と速度を記録します。
         NSLocationAlwaysAndWhenInUseUsageDescription: 画面を消しているときやほかのアプリを使っているときも、走行の記録を続けます。
         NSMotionUsageDescription: 運転の評価のため、加速度・回転・気圧を記録します。

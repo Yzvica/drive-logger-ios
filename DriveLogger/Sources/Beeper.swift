@@ -5,13 +5,15 @@ import AVFoundation
 final class Beeper {
     static let shared = Beeper()
 
-    enum Kind {
+    enum Kind: Hashable {
         /// 動画と合わせる合図。DJI Mic で拾いやすく、波形でも見つけやすい 2kHz の短い音を3回
         case sync
         /// 目印。短い音を1回
         case mark
         /// 記録を止めた。低めの音を2回
         case stop
+        /// 記録中のサポート(急な操作)。同期の合図(2kHz)と取り違えないよう、どれも 1kHz 以下にする
+        case coach(CoachEvent)
     }
 
     private var players: [Kind: AVAudioPlayer] = [:]
@@ -50,6 +52,11 @@ final class Beeper {
         case .sync: wav = Beeper.tones([(2000, 0.12), (0, 0.08), (2000, 0.12), (0, 0.08), (2000, 0.12)])
         case .mark: wav = Beeper.tones([(1500, 0.08)])
         case .stop: wav = Beeper.tones([(800, 0.15), (0, 0.08), (600, 0.2)])
+        case .coach(.brake): wav = Beeper.tones([(700, 0.09), (0, 0.04), (480, 0.14)], amp: 0.5)    // 下がる
+        case .coach(.accel): wav = Beeper.tones([(480, 0.09), (0, 0.04), (760, 0.12)], amp: 0.5)    // 上がる
+        case .coach(.steer): wav = Beeper.tones([(900, 0.06), (0, 0.05), (900, 0.06)], amp: 0.5)    // 短く2回
+        case .coach(.jerk): wav = Beeper.tones([(600, 0.1)], amp: 0.4)                               // 短く1回
+        case .coach(.stopJerk): wav = Beeper.tones([(380, 0.18)], amp: 0.5)                          // 低く1回
         }
         guard let p = try? AVAudioPlayer(data: wav) else { return nil }
         p.volume = 1
@@ -59,14 +66,14 @@ final class Beeper {
     }
 
     /// (周波数 Hz, 長さ 秒) の並びから 16bit モノラルの WAV を作る。周波数 0 は無音
-    static func tones(_ parts: [(Double, Double)], rate: Double = 44100) -> Data {
+    static func tones(_ parts: [(Double, Double)], rate: Double = 44100, amp peak: Double = 0.9) -> Data {
         var samples: [Int16] = []
         for (freq, dur) in parts {
             let n = Int(dur * rate)
             let fade = min(Int(0.005 * rate), n / 2) // プツッと鳴らないよう前後 5ms をなめらかにする
             for i in 0..<n {
                 guard freq > 0 else { samples.append(0); continue }
-                var amp = 0.9
+                var amp = peak
                 if i < fade { amp *= Double(i) / Double(fade) }
                 if i >= n - fade { amp *= Double(n - 1 - i) / Double(fade) }
                 samples.append(Int16(amp * 32767 * sin(2 * .pi * freq * Double(i) / rate)))

@@ -108,7 +108,7 @@ final class Uploader: ObservableObject {
         }
 
         // meta.json は送った記録を書き込んでから最後に送る
-        for name in LogStore.rawFiles where !meta.rawSent.contains(name) {
+        for name in LogStore.uploadFiles where !meta.rawSent.contains(name) {
             if name == "meta.json" {
                 meta.rawSent.append(name)
                 LogStore.shared.save(meta)

@@ -49,6 +49,29 @@ struct RecordView: View {
                     .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
             }
 
+            if recorder.isRecording {
+                CoachPanel(state: recorder.coachState)
+            }
+
+            if !recorder.isRecording && recorder.isEvaluating {
+                HStack { ProgressView(); Text("運転の評価を計算しています…").font(.footnote).foregroundStyle(.secondary) }
+            } else if !recorder.isRecording, let last = recorder.lastEvaluation {
+                // 止めた直後に今回の評価を出す(詳しくはログの画面で)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("今回の運転").font(.caption.bold()).foregroundStyle(.secondary)
+                    EvalSummary(eval: last.eval)
+                }
+                .padding(10)
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                .overlay(alignment: .topTrailing) {
+                    Button { recorder.lastEvaluation = nil } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .padding(6)
+                    .accessibilityLabel("閉じる")
+                }
+            }
+
             Spacer(minLength: 0)
 
             if !recorder.isRecording {
