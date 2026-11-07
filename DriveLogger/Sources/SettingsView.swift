@@ -29,6 +29,7 @@ struct SettingsView: View {
                     }
                     .disabled(recorder.isRecording)
                     Toggle("走行が終わったら自動で送る", isOn: $settings.autoUpload)
+                    Toggle("記録中は画面を消さない", isOn: $settings.keepScreenOn)
                 }
             }
             .navigationTitle("設定")

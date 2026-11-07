@@ -96,7 +96,7 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         current = m
         track = []
         isRecording = true
-        UIApplication.shared.isIdleTimerDisabled = false
+        updateIdleTimer()
 
         location.allowsBackgroundLocationUpdates = true
         location.showsBackgroundLocationIndicator = true
@@ -122,6 +122,12 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
+    /// 記録中で「記録中は画面を消さない」がオンのときだけ、画面の自動ロックを止める
+    func updateIdleTimer() {
+        let on = isRecording && AppSettings.shared.keepScreenOn
+        DispatchQueue.main.async { UIApplication.shared.isIdleTimerDisabled = on }
+    }
+
     func stop() {
         guard isRecording else { return }
         location.stopUpdatingHeading()
@@ -136,6 +142,7 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         motion.stopDeviceMotionUpdates()
         altimeter.stopRelativeAltitudeUpdates()
         isRecording = false
+        updateIdleTimer()
         motionQueue.waitUntilAllOperationsAreFinished()
         io.sync {
             gpx?.close(); locationCSV?.close(); motionCSV?.close(); pressureCSV?.close()
