@@ -1,0 +1,35 @@
+name: ビルド(署名なし IPA)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: XcodeGen を入れる
+        run: brew install xcodegen
+      - name: Xcode プロジェクトを作る
+        run: xcodegen generate
+      - name: ビルド
+        run: |
+          xcodebuild -quiet -project DriveLogger.xcodeproj -scheme DriveLogger \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build
+      - name: IPA にまとめる
+        run: |
+          mkdir -p out/Payload
+          cp -R build/Build/Products/Release-iphoneos/DriveLogger.app out/Payload/
+          cd out && zip -qr DriveLogger-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DriveLogger-unsigned-ipa
+          path: out/DriveLogger-unsigned.ipa
+          retention-days: 30
