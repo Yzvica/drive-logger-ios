@@ -1,6 +1,15 @@
 import SwiftUI
 
+/// ログ画面の行き先
+enum LogRoute: Hashable {
+    case allDays
+    case day(String) // yyyy-MM-dd(開始時刻のローカル日付)
+    case detail(String) // 走行ID
+}
+
 struct LogsView: View {
+    static let recentCount = 5
+
     @EnvironmentObject var store: LogStore
     @EnvironmentObject var uploader: Uploader
     @EnvironmentObject var recorder: Recorder
@@ -20,19 +29,111 @@ struct LogsView: View {
                         Text(message).font(.footnote).foregroundStyle(.secondary)
                     }
                 }
-                Section("走行") {
-                    ForEach(store.sessions) { meta in
-                        NavigationLink(value: meta.id) { row(meta) }
-                    }
-                    .onDelete { offsets in
-                        for i in offsets where store.sessions[i].finished { store.delete(store.sessions[i].id) }
+                Section("最新") {
+                    SessionRows(sessions: Array(store.sessions.prefix(LogsView.recentCount)))
+                }
+                Section {
+                    NavigationLink(value: LogRoute.allDays) {
+                        LabeledContent("すべてのログ", value: "\(store.sessions.count)件")
                     }
                 }
             }
             .navigationTitle("ログ")
-            .navigationDestination(for: String.self) { id in LogDetailView(id: id) }
+            .navigationDestination(for: LogRoute.self) { route in
+                switch route {
+                case .allDays: AllDaysView()
+                case .day(let key): DayLogsView(dayKey: key)
+                case .detail(let id): LogDetailView(id: id)
+                }
+            }
             .refreshable { store.reload() }
         }
+    }
+}
+
+/// 走行の行を並べる。押すと詳細、左にスワイプで削除(記録中のものは消せない)
+struct SessionRows: View {
+    let sessions: [SessionMeta]
+    @EnvironmentObject var store: LogStore
+
+    var body: some View {
+        ForEach(sessions) { meta in
+            NavigationLink(value: LogRoute.detail(meta.id)) { SessionRow(meta: meta) }
+                .deleteDisabled(!meta.finished)
+        }
+        .onDelete { offsets in
+            for i in offsets where sessions[i].finished { store.delete(sessions[i].id) }
+        }
+    }
+}
+
+/// 日付の一覧(新しい日付が上)
+struct AllDaysView: View {
+    @EnvironmentObject var store: LogStore
+
+    struct Day: Identifiable {
+        let id: String // yyyy-MM-dd
+        let date: Date
+        let count: Int
+        let distanceM: Double
+        let hasUnsent: Bool
+    }
+
+    private var days: [Day] {
+        let unsent = Set(store.unsent.map(\.id))
+        let groups = Dictionary(grouping: store.sessions) { Display.dayKey.string(from: $0.start) }
+        return groups.map { key, list in
+            Day(id: key, date: list.map(\.start).min() ?? Date(), count: list.count,
+                distanceM: list.reduce(0) { $0 + $1.distanceM },
+                hasUnsent: list.contains { unsent.contains($0.id) || !$0.finished })
+        }
+        .sorted { $0.id > $1.id }
+    }
+
+    var body: some View {
+        List(days) { day in
+            NavigationLink(value: LogRoute.day(day.id)) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(Display.day.string(from: day.date)).font(.headline)
+                        Text("\(day.count)件・合計 \(Display.km(day.distanceM))")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if day.hasUnsent {
+                        Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
+                            .accessibilityLabel("未送信あり")
+                    }
+                }
+            }
+        }
+        .overlay { if days.isEmpty { Text("ログはまだありません").foregroundStyle(.secondary) } }
+        .navigationTitle("すべてのログ")
+        .refreshable { store.reload() }
+    }
+}
+
+/// 1日分の走行の一覧
+struct DayLogsView: View {
+    let dayKey: String
+    @EnvironmentObject var store: LogStore
+
+    var body: some View {
+        let list = store.sessions.filter { Display.dayKey.string(from: $0.start) == dayKey }
+        List {
+            SessionRows(sessions: list)
+        }
+        .overlay { if list.isEmpty { Text("この日のログはありません").foregroundStyle(.secondary) } }
+        .navigationTitle(list.first.map { Display.day.string(from: $0.start) } ?? dayKey)
+        .refreshable { store.reload() }
+    }
+}
+
+struct SessionRow: View {
+    let meta: SessionMeta
+
+    var body: some View {
+        row(meta)
     }
 
     private func row(_ meta: SessionMeta) -> some View {
