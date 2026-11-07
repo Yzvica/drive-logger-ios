@@ -3,12 +3,26 @@ import SwiftUI
 
 struct RecordView: View {
     @EnvironmentObject var recorder: Recorder
+    @EnvironmentObject var settings: AppSettings
 
     var body: some View {
         VStack(spacing: 16) {
-            TrackMapView(track: recorder.track)
+            TrackMapView(track: recorder.track, style: settings.mapStyle, headingUp: $settings.mapHeadingUp)
                 .frame(maxWidth: .infinity)
                 .frame(minHeight: 180)
+                .overlay(alignment: .topLeading) {
+                    Menu {
+                        Picker("地図", selection: $settings.mapStyle) {
+                            ForEach(MapStyle.allCases) { Text($0.title).tag($0) }
+                        }
+                    } label: {
+                        Label(settings.mapStyle.title, systemImage: "map")
+                            .font(.footnote.bold())
+                            .padding(.horizontal, 10).padding(.vertical, 6)
+                            .background(.regularMaterial, in: Capsule())
+                    }
+                    .padding(8)
+                }
                 .clipShape(RoundedRectangle(cornerRadius: 12))
 
             HStack(alignment: .firstTextBaseline, spacing: 4) {

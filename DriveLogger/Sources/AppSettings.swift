@@ -17,8 +17,19 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(autoUpload, forKey: "autoUpload") }
     }
 
+    /// 記録画面の地図の種類
+    @Published var mapStyle: MapStyle {
+        didSet { UserDefaults.standard.set(mapStyle.rawValue, forKey: "mapStyle") }
+    }
+    /// 地図の追尾で進行方向を上にする(false なら北が上)
+    @Published var mapHeadingUp: Bool {
+        didSet { UserDefaults.standard.set(mapHeadingUp, forKey: "mapHeadingUp") }
+    }
+
     private init() {
         let d = UserDefaults.standard
+        mapStyle = d.string(forKey: "mapStyle").flatMap(MapStyle.init(rawValue:)) ?? .appleStandard
+        mapHeadingUp = d.bool(forKey: "mapHeadingUp")
         serverURL = d.string(forKey: "serverURL") ?? AppSettings.defaultServer
         motionHz = d.object(forKey: "motionHz") as? Int ?? 50
         autoUpload = d.object(forKey: "autoUpload") as? Bool ?? true
