@@ -17,6 +17,14 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(autoUpload, forKey: "autoUpload") }
     }
 
+    /// 記録中は画面を自動で消さない(画面を消しても記録は続くが、念のため)
+    @Published var keepScreenOn: Bool {
+        didSet {
+            UserDefaults.standard.set(keepScreenOn, forKey: "keepScreenOn")
+            Recorder.shared.updateIdleTimer()
+        }
+    }
+
     /// 記録画面の地図の種類
     @Published var mapStyle: MapStyle {
         didSet { UserDefaults.standard.set(mapStyle.rawValue, forKey: "mapStyle") }
@@ -33,6 +41,7 @@ final class AppSettings: ObservableObject {
         serverURL = d.string(forKey: "serverURL") ?? AppSettings.defaultServer
         motionHz = d.object(forKey: "motionHz") as? Int ?? 50
         autoUpload = d.object(forKey: "autoUpload") as? Bool ?? true
+        keepScreenOn = d.object(forKey: "keepScreenOn") as? Bool ?? true
     }
 
     /// 末尾の / を除いた送り先
