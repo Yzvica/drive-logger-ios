@@ -1,0 +1,48 @@
+name: DriveLogger
+options:
+  bundleIdPrefix: com.yzvica
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  DriveLogger:
+    type: application
+    platform: iOS
+    sources:
+      - DriveLogger/Sources
+    info:
+      path: DriveLogger/Info.plist
+      properties:
+        CFBundleDisplayName: 走行ロガー
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UIBackgroundModes:
+          - location
+        NSLocationWhenInUseUsageDescription: 走行の経路と速度を記録します。
+        NSLocationAlwaysAndWhenInUseUsageDescription: 画面を消しているときやほかのアプリを使っているときも、走行の記録を続けます。
+        NSMotionUsageDescription: 運転の評価のため、加速度・回転・気圧を記録します。
+        NSLocalNetworkUsageDescription: 自宅の地図サーバー(MiniPC)へ走行ログを送ります。
+        # 送り先は LAN や Tailscale の http なので、http を許可する
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+          NSAllowsLocalNetworking: true
+        # 「ファイル」アプリからログを見られるようにする
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.yzvica.drivelogger
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGN_IDENTITY: ""
