@@ -3,12 +3,26 @@ import SwiftUI
 
 struct RecordView: View {
     @EnvironmentObject var recorder: Recorder
+    @EnvironmentObject var settings: AppSettings
 
     var body: some View {
         VStack(spacing: 16) {
-            TrackMapView(track: recorder.track)
+            TrackMapView(track: recorder.track, style: settings.mapStyle, headingUp: $settings.mapHeadingUp)
                 .frame(maxWidth: .infinity)
                 .frame(minHeight: 180)
+                .overlay(alignment: .topLeading) {
+                    Menu {
+                        Picker("地図", selection: $settings.mapStyle) {
+                            ForEach(MapStyle.allCases) { Text($0.title).tag($0) }
+                        }
+                    } label: {
+                        Label(settings.mapStyle.title, systemImage: "map")
+                            .font(.footnote.bold())
+                            .padding(.horizontal, 10).padding(.vertical, 6)
+                            .background(.regularMaterial, in: Capsule())
+                    }
+                    .padding(8)
+                }
                 .clipShape(RoundedRectangle(cornerRadius: 12))
 
             HStack(alignment: .firstTextBaseline, spacing: 4) {
@@ -37,6 +51,28 @@ struct RecordView: View {
 
             Spacer(minLength: 0)
 
+            if !recorder.isRecording {
+                // 記録の前に忘れやすいこと(折りたためる。開閉は覚えておく)
+                DisclosureGroup(isExpanded: $showChecklist) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("・DJI の録画を先に始めてから「記録開始」(同期の合図が動画に入る)")
+                        Text("・DJI Mic のマイク表示・SD の空き・電池を確認")
+                        Text("・空が見える所で、GPS 精度が ±10m 前後になってから発進")
+                        Text("・停止は走り終えてから(途中で押すと走行が分かれます)")
+                    }
+                    .font(.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 4)
+                } label: {
+                    Label("記録の前に", systemImage: "checklist").font(.caption.bold())
+                }
+                .padding(10)
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+            } else {
+                Text("停止は走り終えてから(途中で押すと走行が分かれます)")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+
             if recorder.isRecording {
                 HStack(spacing: 12) {
                     bigButton("目印", systemImage: "mappin", color: .blue) { recorder.addMarker("mark") }
@@ -51,11 +87,20 @@ struct RecordView: View {
             bigButton(recorder.isRecording ? "停止" : "記録開始",
                       systemImage: recorder.isRecording ? "stop.fill" : "record.circle",
                       color: recorder.isRecording ? .red : .green) {
-                recorder.isRecording ? recorder.stop() : recorder.start()
+                if recorder.isRecording { confirmStop = true } else { recorder.start() }
             }
         }
         .padding()
+        .confirmationDialog("記録を止めますか?", isPresented: $confirmStop, titleVisibility: .visible) {
+            Button("停止する", role: .destructive) { recorder.stopWithSync() }
+            Button("記録を続ける", role: .cancel) {}
+        } message: {
+            Text("止める直前に同期の合図(光と音)を出します。DJI の録画はそのあとで止めてください")
+        }
     }
+
+    @State private var confirmStop = false
+    @AppStorage("showChecklist") private var showChecklist = true
 
     private func stat(_ title: String, _ value: String) -> some View {
         VStack(spacing: 2) {
