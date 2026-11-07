@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import UIKit
 
 /// 走行ログを MiniPC の地図サーバーへ送る。
 /// - GPX は POST /api/inbox?name=<走行ID>.gpx(地図が国道の判定をする)
@@ -36,12 +37,33 @@ final class Uploader: ObservableObject {
         monitor.start(queue: DispatchQueue(label: "uploader.monitor"))
     }
 
+    /// 送れなかったときに送り直すまでの秒数(記録を止めたあと、アプリを起こしている間だけ)
+    static let retryInterval: TimeInterval = 30
+    private var retryItem: DispatchWorkItem?
+    private var bgTask: UIBackgroundTaskIdentifier = .invalid
+
+    private func endBackgroundTask() {
+        guard bgTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(bgTask)
+        bgTask = .invalid
+    }
+
     func uploadPending() {
         guard !isUploading, !Recorder.shared.isRecording else { return }
+        retryItem?.cancel()
+        retryItem = nil
         LogStore.shared.reload()
         let targets = LogStore.shared.unsent
-        guard !targets.isEmpty, let base = AppSettings.shared.baseURL else { return }
+        guard !targets.isEmpty, let base = AppSettings.shared.baseURL else {
+            Recorder.shared.endUploadKeepAlive()
+            return
+        }
         isUploading = true
+        // 画面を消してアプリが裏に回っても、送っている途中で止められないようにする
+        endBackgroundTask()
+        bgTask = UIApplication.shared.beginBackgroundTask(withName: "upload") { [weak self] in
+            self?.endBackgroundTask()
+        }
         Task {
             var done = 0
             var failed: String?
@@ -59,6 +81,15 @@ final class Uploader: ObservableObject {
                 self.isUploading = false
                 self.lastMessage = message
                 LogStore.shared.reload()
+                if failed == nil {
+                    Recorder.shared.endUploadKeepAlive()
+                } else if Recorder.shared.keepingAliveForUpload {
+                    // テザリングがまだつながっていないなどのときは、少し待って送り直す
+                    let item = DispatchWorkItem { [weak self] in self?.uploadPending() }
+                    self.retryItem = item
+                    DispatchQueue.main.asyncAfter(deadline: .now() + Uploader.retryInterval, execute: item)
+                }
+                self.endBackgroundTask()
             }
         }
     }

@@ -1,4 +1,3 @@
-import AudioToolbox
 import CoreLocation
 import CoreMotion
 import UIKit
@@ -50,6 +49,12 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     func start() {
         guard !isRecording else { return }
+        if keepingAliveForUpload {
+            keepingAliveForUpload = false
+            keepAliveDeadline?.cancel()
+            keepAliveDeadline = nil
+        }
+        restoreRecordingAccuracy()
         if location.authorizationStatus == .notDetermined {
             location.requestWhenInUseAuthorization()
         } else if location.authorizationStatus == .authorizedWhenInUse {
@@ -99,13 +104,22 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         location.startUpdatingHeading()
         startMotion(hz: m.motionHz, uptimeToUnix: uptimeToUnix)
         startAltimeter(uptimeToUnix: uptimeToUnix)
+
+        // 記録を始めたら、動画と合わせる合図(光と音)を自動で1回出す
+        addMarker("sync")
     }
 
     func stop() {
         guard isRecording else { return }
-        location.stopUpdatingLocation()
         location.stopUpdatingHeading()
-        location.allowsBackgroundLocationUpdates = false
+        if AppSettings.shared.autoUpload {
+            // 送り終えるまでは、精度を落とした位置の更新を続けてアプリを起こしておく。
+            // 止めるとすぐに眠ってしまい、画面を消したときにテザリングで送れない
+            beginUploadKeepAlive()
+        } else {
+            location.stopUpdatingLocation()
+            location.allowsBackgroundLocationUpdates = false
+        }
         motion.stopDeviceMotionUpdates()
         altimeter.stopRelativeAltitudeUpdates()
         isRecording = false
@@ -120,7 +134,43 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
             }
         }
         current = nil
+        Beeper.shared.play(.stop)
         if AppSettings.shared.autoUpload { Uploader.shared.uploadPending() }
+    }
+
+    // MARK: - 送信が終わるまでアプリを起こしておく
+
+    /// 記録を止めてから、送り終えるまで(最長この秒数)アプリを起こしておく
+    static let uploadKeepAliveLimit: TimeInterval = 15 * 60
+    @Published private(set) var keepingAliveForUpload = false
+    private var keepAliveDeadline: DispatchWorkItem?
+
+    private func beginUploadKeepAlive() {
+        keepingAliveForUpload = true
+        location.desiredAccuracy = kCLLocationAccuracyThreeKilometers
+        location.distanceFilter = 500
+        location.allowsBackgroundLocationUpdates = true
+        location.startUpdatingLocation()
+        keepAliveDeadline?.cancel()
+        let item = DispatchWorkItem { [weak self] in self?.endUploadKeepAlive() }
+        keepAliveDeadline = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + Recorder.uploadKeepAliveLimit, execute: item)
+    }
+
+    /// 送り終えたとき(または諦めたとき)に呼ぶ
+    func endUploadKeepAlive() {
+        guard keepingAliveForUpload, !isRecording else { return }
+        keepingAliveForUpload = false
+        keepAliveDeadline?.cancel()
+        keepAliveDeadline = nil
+        location.stopUpdatingLocation()
+        location.allowsBackgroundLocationUpdates = false
+        restoreRecordingAccuracy()
+    }
+
+    private func restoreRecordingAccuracy() {
+        location.desiredAccuracy = kCLLocationAccuracyBestForNavigation
+        location.distanceFilter = kCLDistanceFilterNone
     }
 
     // MARK: - 目印と動画の同期
@@ -129,14 +179,16 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
     func addMarker(_ kind: String) {
         guard isRecording else { return }
         let loc = lastLocation
-        let marker = Marker(kind: kind, time: Date(), lat: loc?.coordinate.latitude, lon: loc?.coordinate.longitude)
+        let played: Date?
         if kind == "sync" {
-            AudioServicesPlaySystemSound(1057)
+            played = Beeper.shared.play(.sync)
             flash = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { self.flash = false }
         } else {
-            AudioServicesPlaySystemSound(1104)
+            played = Beeper.shared.play(.mark)
         }
+        // 時刻は音が出た瞬間に合わせる(動画の音声から同期の合図を探すため)
+        let marker = Marker(kind: kind, time: played ?? Date(), lat: loc?.coordinate.latitude, lon: loc?.coordinate.longitude)
         io.async {
             self.meta?.markers.append(marker)
             if let m = self.meta { LogStore.shared.save(m) }

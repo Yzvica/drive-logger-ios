@@ -30,6 +30,11 @@ struct RecordView: View {
                     .font(.footnote).foregroundStyle(.orange).multilineTextAlignment(.center)
             }
 
+            if !recorder.isRecording && recorder.keepingAliveForUpload {
+                Text("地図へ送り終えるまで、裏で起動したままにしています")
+                    .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            }
+
             Spacer(minLength: 0)
 
             if recorder.isRecording {
