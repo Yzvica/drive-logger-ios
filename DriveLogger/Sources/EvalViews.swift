@@ -141,3 +141,93 @@ struct EvalSection: View {
         }
     }
 }
+
+// MARK: - 記録中のサポート
+
+/// 記録中に出す、G の点・直近 5 分の点数・出来事の回数
+struct CoachPanel: View {
+    let state: CoachState
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            GDot(lonG: state.lonG, latG: state.latG, ready: state.ready)
+                .frame(width: 104, height: 104)
+            VStack(alignment: .leading, spacing: 4) {
+                if !state.ready {
+                    Text("車の向きを合わせています").font(.subheadline.bold())
+                    ProgressView(value: state.progress)
+                    Text("ふつうに走りだせば、1〜2分で合います").font(.caption).foregroundStyle(.secondary)
+                } else {
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text("直近5分").font(.caption).foregroundStyle(.secondary)
+                        if let s = state.recentScore {
+                            Text(String(format: "%.0f", s))
+                                .font(.title.bold()).monospacedDigit()
+                                .foregroundStyle(EvalStyle.color(s))
+                            Text("点").font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            Text("走行中に出ます").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    if let key = state.recentWorst, let tip = EvalStyle.tips[key] {
+                        Text(tip).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    }
+                    countsRow
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(10)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var countsRow: some View {
+        let total = state.counts.values.reduce(0, +)
+        let parts = CoachEvent.allCases.compactMap { e in state.counts[e].map { "\(e.rawValue) \($0)" } }
+        return VStack(alignment: .leading, spacing: 2) {
+            Text(total == 0 ? "急な操作 0 回" : parts.joined(separator: "・"))
+                .font(.caption.bold()).monospacedDigit()
+            if let last = state.last, Date().timeIntervalSince(last.at) < 8 {
+                Text("いま: \(last.event.rawValue)").font(.caption.bold()).foregroundStyle(.orange)
+            }
+        }
+    }
+}
+
+/// G の点。上が減速、下が加速、左右は体が押される向き。内側の円が 0.15G、外側が 0.3G(これを超えると急な操作)
+struct GDot: View {
+    let lonG: Double
+    let latG: Double
+    let ready: Bool
+    static let fullG = 0.4
+
+    var body: some View {
+        GeometryReader { geo in
+            let r = min(geo.size.width, geo.size.height) / 2
+            let c = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
+            let mag = (lonG * lonG + latG * latG).squareRoot()
+            let k = mag > GDot.fullG ? GDot.fullG / mag : 1
+            let p = CGPoint(x: c.x + CGFloat(latG * k / GDot.fullG) * r,
+                            y: c.y + CGFloat(lonG * k / GDot.fullG) * r)
+            ZStack {
+                Circle().stroke(.quaternary, lineWidth: 1)
+                Circle().stroke(Color.orange.opacity(0.6), lineWidth: 1.5)
+                    .frame(width: r * 2 * 0.3 / GDot.fullG, height: r * 2 * 0.3 / GDot.fullG)
+                Circle().stroke(Color.green.opacity(0.6), lineWidth: 1.5)
+                    .frame(width: r * 2 * 0.15 / GDot.fullG, height: r * 2 * 0.15 / GDot.fullG)
+                Path { path in
+                    path.move(to: CGPoint(x: c.x - r, y: c.y)); path.addLine(to: CGPoint(x: c.x + r, y: c.y))
+                    path.move(to: CGPoint(x: c.x, y: c.y - r)); path.addLine(to: CGPoint(x: c.x, y: c.y + r))
+                }
+                .stroke(.quaternary, lineWidth: 0.5)
+                if ready {
+                    Circle().fill(mag >= 0.3 ? Color.red : mag >= 0.15 ? Color.yellow : Color.green)
+                        .frame(width: 16, height: 16)
+                        .position(p)
+                        .animation(.linear(duration: 0.2), value: lonG)
+                }
+            }
+        }
+        .accessibilityLabel(ready ? String(format: "前後 %.2f G、左右 %.2f G", lonG, latG) : "向き合わせ中")
+    }
+}

@@ -49,6 +49,10 @@ struct RecordView: View {
                     .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
             }
 
+            if recorder.isRecording {
+                CoachPanel(state: recorder.coachState)
+            }
+
             if !recorder.isRecording && recorder.isEvaluating {
                 HStack { ProgressView(); Text("運転の評価を計算しています…").font(.footnote).foregroundStyle(.secondary) }
             } else if !recorder.isRecording, let last = recorder.lastEvaluation {
