@@ -184,9 +184,12 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
             guard good else { return }
             self.gpx?.add(lat: loc.coordinate.latitude, lon: loc.coordinate.longitude,
                           ele: loc.verticalAccuracy >= 0 ? loc.altitude : nil, time: loc.timestamp, speed: speed)
-            self.meta?.points += 1
-            self.meta?.distanceM += addDistance
-            if let s = speed { self.meta?.maxSpeedMS = max(self.meta?.maxSpeedMS ?? 0, s) }
+            if var m = self.meta {
+                m.points += 1
+                m.distanceM += addDistance
+                if let s = speed { m.maxSpeedMS = max(m.maxSpeedMS, s) }
+                self.meta = m
+            }
             // 落ちたときのため、30秒ごとに meta.json と書きかけのファイルを保存する
             let now = ProcessInfo.processInfo.systemUptime
             if now - self.lastMetaSave > 30, let m = self.meta {
