@@ -54,14 +54,24 @@ final class LogStore: ObservableObject {
 
     static let encoder: JSONEncoder = {
         let e = JSONEncoder()
-        e.dateEncodingStrategy = .iso8601
+        // 同期の合図を動画と合わせるので、時刻はミリ秒まで残す(.iso8601 だと秒未満が切り捨てられる)
+        e.dateEncodingStrategy = .custom { date, enc in
+            var c = enc.singleValueContainer()
+            try c.encode(Fmt.iso.string(from: date))
+        }
         e.outputFormatting = [.prettyPrinted, .sortedKeys]
         return e
     }()
 
     static let decoder: JSONDecoder = {
         let d = JSONDecoder()
-        d.dateDecodingStrategy = .iso8601
+        // 秒未満のあるもの(新しい形)とないもの(前の版で書いたもの)の両方を読む
+        let plain = ISO8601DateFormatter()
+        d.dateDecodingStrategy = .custom { dec in
+            let s = try dec.singleValueContainer().decode(String.self)
+            if let t = Fmt.iso.date(from: s) ?? plain.date(from: s) { return t }
+            throw DecodingError.dataCorrupted(.init(codingPath: dec.codingPath, debugDescription: "時刻を読めません: \(s)"))
+        }
         return d
     }()
 
