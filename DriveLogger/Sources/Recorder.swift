@@ -109,6 +109,19 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         addMarker("sync")
     }
 
+    /// 停止ボタンから呼ぶ。止める直前に同期の合図(光と音)を出し、鳴り終わってから止める
+    @Published private(set) var isStopping = false
+    func stopWithSync() {
+        guard isRecording, !isStopping else { return }
+        isStopping = true
+        addMarker("sync")
+        // 同期音は 0.52 秒。少し余裕を持たせてから停止音を鳴らして止める
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+            self.isStopping = false
+            self.stop()
+        }
+    }
+
     func stop() {
         guard isRecording else { return }
         location.stopUpdatingHeading()
