@@ -12,6 +12,12 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published private(set) var speedMS: Double = 0
     @Published private(set) var horizontalAccuracy: Double = -1
     @Published private(set) var horizontalG: Double = 0
+    /// GPS の高度(m)。測れていなければ nil
+    @Published private(set) var altitudeM: Double?
+    /// 記録中・直前に記録した移動手段
+    @Published private(set) var mode: TravelMode = .car
+    /// 直前に止めた車以外の移動(記録画面にまとめを出す)
+    @Published var lastTrip: SessionMeta?
     @Published private(set) var track: [CLLocationCoordinate2D] = []
     @Published private(set) var authorization: CLAuthorizationStatus = .notDetermined
     @Published var flash = false
@@ -54,12 +60,22 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
     func start() {
         guard !isRecording else { return }
         lastEvaluation = nil
-        let c = LiveCoach()
-        c.onEvent = { e in
-            DispatchQueue.main.async { if AppSettings.shared.coachSound { Beeper.shared.play(.coach(e)) } }
+        lastTrip = nil
+        let mode = AppSettings.shared.travelMode
+        self.mode = mode
+        // 記録中のサポート(G の点・急な操作の音)は車のときだけ
+        if mode.isCar {
+            let c = LiveCoach()
+            c.onEvent = { e in
+                DispatchQueue.main.async { if AppSettings.shared.coachSound { Beeper.shared.play(.coach(e)) } }
+            }
+            coach = c
+        } else {
+            coach = nil
         }
-        coach = c
         coachState = CoachState()
+        altitudeM = nil
+        location.activityType = mode.activityType
         if keepingAliveForUpload {
             keepingAliveForUpload = false
             keepAliveDeadline?.cancel()
@@ -83,8 +99,9 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
             id: id, start: now, end: nil,
             device: Recorder.deviceModel(), systemVersion: UIDevice.current.systemVersion,
             appVersion: "\(info?["CFBundleShortVersionString"] ?? "?") (\(info?["CFBundleVersion"] ?? "?"))",
-            motionHz: AppSettings.shared.motionHz, uptimeToUnix: uptimeToUnix)
+            motionHz: mode.isCar ? AppSettings.shared.motionHz : TravelMode.tripMotionHz, uptimeToUnix: uptimeToUnix)
         m.points = 0
+        m.mode = mode
 
         do {
             gpx = try GPXWriter(url: dir.appendingPathComponent("track.gpx"), name: id)
@@ -116,8 +133,9 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         startMotion(hz: m.motionHz, uptimeToUnix: uptimeToUnix)
         startAltimeter(uptimeToUnix: uptimeToUnix)
 
-        // 記録を始めたら、動画と合わせる合図(光と音)を自動で1回出す
-        addMarker("sync")
+        // 車なら、記録を始めたときに動画と合わせる合図(光と音)を自動で1回出す。
+        // 電車や飛行機の中では音を鳴らさない
+        if mode.isCar { addMarker("sync") }
     }
 
     /// 停止ボタンから呼ぶ。止める直前に同期の合図(光と音)を出し、鳴り終わってから止める
@@ -128,6 +146,7 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var lastEvaluation: (id: String, eval: Evaluation)?
     func stopWithSync() {
         guard isRecording, !isStopping else { return }
+        guard mode.isCar else { stop(); return }
         isStopping = true
         addMarker("sync")
         // 同期音は 0.52 秒。少し余裕を持たせてから停止音を鳴らして止める
@@ -172,6 +191,12 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
         current = nil
         coach = nil
+        // 車以外は音を鳴らさず、運転評価もしない
+        guard mode.isCar else {
+            lastTrip = finishedID.flatMap { LogStore.shared.load($0) }
+            if AppSettings.shared.autoUpload { Uploader.shared.uploadPending() }
+            return
+        }
         Beeper.shared.play(.stop)
         // 運転評価を計算してから送る(evaluation.json も一緒に送り、地図ですぐ見られるようにする)
         guard let id = finishedID else {
@@ -219,6 +244,7 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
     private func restoreRecordingAccuracy() {
         location.desiredAccuracy = kCLLocationAccuracyBestForNavigation
         location.distanceFilter = kCLDistanceFilterNone
+        location.activityType = mode.activityType
     }
 
     // MARK: - 目印と動画の同期
@@ -263,6 +289,7 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         let t = loc.timestamp.timeIntervalSince1970
         let speed = loc.speed >= 0 ? loc.speed : nil
         let coord = loc.coordinate, acc = loc.horizontalAccuracy
+        let altitude = loc.verticalAccuracy >= 0 ? loc.altitude : nil
         motionQueue.addOperation {
             self.coach?.addLocation(t: t, lat: coord.latitude, lon: coord.longitude, speed: speed, accuracy: acc)
         }
@@ -292,6 +319,7 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
                 m.points += 1
                 m.distanceM += addDistance
                 if let s = speed { m.maxSpeedMS = max(m.maxSpeedMS, s) }
+                if let a = altitude { m.maxAltitudeM = max(m.maxAltitudeM ?? a, a) }
                 self.meta = m
             }
             // 落ちたときのため、30秒ごとに meta.json と書きかけのファイルを保存する
@@ -306,6 +334,7 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         DispatchQueue.main.async {
             self.speedMS = speed ?? 0
             self.horizontalAccuracy = loc.horizontalAccuracy
+            self.altitudeM = altitude
             if good { self.track.append(loc.coordinate) }
             self.io.async { let m = self.meta; DispatchQueue.main.async { if self.isRecording { self.current = m } } }
         }

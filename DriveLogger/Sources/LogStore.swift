@@ -29,6 +29,12 @@ struct SessionMeta: Codable, Identifiable, Hashable {
     var rawSent: [String] = []
     /// 記録中にアプリが落ち、次の起動時に閉じた走行なら true
     var recovered: Bool?
+    /// 移動手段。無ければ車(移動手段を選べるようになる前の版で記録したもの)
+    var mode: TravelMode?
+    /// GPS の高度の最高値(m)
+    var maxAltitudeM: Double?
+
+    var travelMode: TravelMode { mode ?? .car }
 
     var finished: Bool { end != nil }
     var durationS: Double { (end ?? Date()).timeIntervalSince(start) }
@@ -224,8 +230,12 @@ final class LogStore: ObservableObject {
         }
     }
 
-    /// 送るべきもの(GPX と生データ)が残っている走行
+    /// 送るべきもの(GPX と生データ)が残っている走行。車以外は GPX を送らない
     var unsent: [SessionMeta] {
-        sessions.filter { $0.finished && (!$0.gpxSent || !LogStore.rawFiles.allSatisfy($0.rawSent.contains)) }
+        sessions.filter { $0.finished && !LogStore.allSent($0) }
+    }
+
+    static func allSent(_ meta: SessionMeta) -> Bool {
+        (meta.gpxSent || !meta.travelMode.isCar) && rawFiles.allSatisfy(meta.rawSent.contains)
     }
 }

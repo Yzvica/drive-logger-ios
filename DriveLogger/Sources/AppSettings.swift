@@ -38,8 +38,14 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(coachSound, forKey: "coachSound") }
     }
 
+    /// 次に記録する移動手段(前回選んだものを覚えておく)
+    @Published var travelMode: TravelMode {
+        didSet { UserDefaults.standard.set(travelMode.rawValue, forKey: "travelMode") }
+    }
+
     private init() {
         let d = UserDefaults.standard
+        travelMode = d.string(forKey: "travelMode").flatMap(TravelMode.init(rawValue:)) ?? .car
         mapStyle = d.string(forKey: "mapStyle").flatMap(MapStyle.init(rawValue:)) ?? .appleStandard
         mapHeadingUp = d.bool(forKey: "mapHeadingUp")
         coachSound = d.object(forKey: "coachSound") as? Bool ?? true
