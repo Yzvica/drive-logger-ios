@@ -5,6 +5,7 @@ import UIKit
 /// 走行ログを MiniPC の地図サーバーへ送る。
 /// - GPX は POST /api/inbox?name=<走行ID>.gpx(地図が国道の判定をする)
 /// - 生データは PUT /api/rawlog?session=<走行ID>&file=<ファイル名>(MiniPC が Google ドライブの _drivelog に置く)
+/// - 車以外(電車・飛行機など)は GPX を送らず(地図に反映しない)、生データに &kind=trip を付けて _drivelog\trips に置く
 /// 通信できないときは端末に残しておき、Wi-Fi やテザリングにつながったときに送り直す
 final class Uploader: ObservableObject {
     static let shared = Uploader()
@@ -99,7 +100,8 @@ final class Uploader: ObservableObject {
         var meta = original
         let dir = LogStore.shared.dir(meta.id)
 
-        if !meta.gpxSent {
+        let isCar = meta.travelMode.isCar
+        if isCar && !meta.gpxSent {
             var c = URLComponents(url: base.appendingPathComponent("api/inbox"), resolvingAgainstBaseURL: false)!
             c.queryItems = [URLQueryItem(name: "name", value: "\(meta.id).gpx")]
             try await send(file: dir.appendingPathComponent("track.gpx"), to: c.url!, method: "POST")
@@ -120,6 +122,7 @@ final class Uploader: ObservableObject {
             }
             var c = URLComponents(url: base.appendingPathComponent("api/rawlog"), resolvingAgainstBaseURL: false)!
             c.queryItems = [URLQueryItem(name: "session", value: meta.id), URLQueryItem(name: "file", value: name)]
+            if !isCar { c.queryItems?.append(URLQueryItem(name: "kind", value: "trip")) }
             do {
                 try await send(file: file, to: c.url!, method: "PUT")
             } catch {

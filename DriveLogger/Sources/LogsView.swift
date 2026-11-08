@@ -140,8 +140,12 @@ struct SessionRow: View {
     private func row(_ meta: SessionMeta) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
+                if !meta.travelMode.isCar {
+                    Image(systemName: meta.travelMode.systemImage).foregroundStyle(.teal)
+                        .accessibilityLabel(meta.travelMode.title)
+                }
                 Text(Display.date.string(from: meta.start)).font(.headline)
-                if let e = store.evaluation(meta.id) { ScoreBadge(score: e.score) }
+                if meta.travelMode.isCar, let e = store.evaluation(meta.id) { ScoreBadge(score: e.score) }
                 Spacer()
                 status(meta)
             }
@@ -153,7 +157,7 @@ struct SessionRow: View {
     @ViewBuilder private func status(_ meta: SessionMeta) -> some View {
         if !meta.finished {
             Text("記録中").font(.caption.bold()).foregroundStyle(.red)
-        } else if meta.gpxSent && LogStore.rawFiles.allSatisfy(meta.rawSent.contains) {
+        } else if LogStore.allSent(meta) {
             Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
         } else if meta.gpxSent {
             Text("生データ未送信").font(.caption).foregroundStyle(.orange)
@@ -174,14 +178,27 @@ struct LogDetailView: View {
         List {
             if let meta {
                 Section("概要") {
+                    LabeledContent("移動手段") {
+                        Label(meta.travelMode.title, systemImage: meta.travelMode.systemImage)
+                    }
                     LabeledContent("開始", value: Display.date.string(from: meta.start))
                     LabeledContent("距離", value: Display.km(meta.distanceM))
                     LabeledContent("時間", value: Display.duration(meta.durationS))
                     LabeledContent("最高速度", value: "\(Display.kmh(meta.maxSpeedMS)) km/h")
+                    if let alt = meta.maxAltitudeM {
+                        LabeledContent("最高高度(GPS)", value: String(format: "%.0f m", alt))
+                    }
                     LabeledContent("位置の点数", value: "\(meta.points)")
                     LabeledContent("端末", value: "\(meta.device) / iOS \(meta.systemVersion)")
                 }
-                EvalSection(id: meta.id, finished: meta.finished)
+                if meta.travelMode.isCar {
+                    EvalSection(id: meta.id, finished: meta.finished)
+                } else {
+                    Section {
+                        Text("\(meta.travelMode.title)の記録は地図に送らず、生データだけを Google ドライブの _drivelog\\trips に送ります")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
                 if !meta.markers.isEmpty {
                     Section("目印") {
                         ForEach(meta.markers, id: \.self) { m in
@@ -208,5 +225,27 @@ struct LogDetailView: View {
     private func size(_ url: URL) -> String {
         let bytes = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
         return ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+    }
+}
+
+/// 車以外の移動のまとめ(距離・時間・最高速度・最高高度)
+struct TripSummary: View {
+    let meta: SessionMeta
+
+    var body: some View {
+        HStack {
+            item("距離", Display.km(meta.distanceM))
+            item("時間", Display.duration(meta.durationS))
+            item("最高速度", "\(Display.kmh(meta.maxSpeedMS)) km/h")
+            item("最高高度", meta.maxAltitudeM.map { String(format: "%.0fm", $0) } ?? "-")
+        }
+    }
+
+    private func item(_ title: String, _ value: String) -> some View {
+        VStack(spacing: 2) {
+            Text(title).font(.caption2).foregroundStyle(.secondary)
+            Text(value).font(.subheadline.bold()).monospacedDigit()
+        }
+        .frame(maxWidth: .infinity)
     }
 }

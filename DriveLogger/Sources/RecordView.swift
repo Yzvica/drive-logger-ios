@@ -35,7 +35,11 @@ struct RecordView: View {
             HStack {
                 stat("距離", Display.km(recorder.current?.distanceM ?? 0))
                 stat("時間", recorder.current.map { Display.duration($0.durationS) } ?? "0:00:00")
-                stat("横G", String(format: "%.2f", recorder.horizontalG))
+                if mode.isCar {
+                    stat("横G", String(format: "%.2f", recorder.horizontalG))
+                } else {
+                    stat("高度", recorder.altitudeM.map { String(format: "%.0fm", $0) } ?? "-")
+                }
                 stat("GPS精度", recorder.horizontalAccuracy < 0 ? "-" : String(format: "±%.0fm", recorder.horizontalAccuracy))
             }
 
@@ -49,8 +53,27 @@ struct RecordView: View {
                     .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
             }
 
-            if recorder.isRecording {
+            if recorder.isRecording && mode.isCar {
                 CoachPanel(state: recorder.coachState)
+            }
+
+            if !recorder.isRecording, let trip = recorder.lastTrip {
+                // 車以外の移動を止めた直後のまとめ(地図には送らない)
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("今回の\(trip.travelMode.title)の移動", systemImage: trip.travelMode.systemImage)
+                        .font(.caption.bold()).foregroundStyle(.secondary)
+                    TripSummary(meta: trip)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                .overlay(alignment: .topTrailing) {
+                    Button { recorder.lastTrip = nil } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .padding(6)
+                    .accessibilityLabel("閉じる")
+                }
             }
 
             if !recorder.isRecording && recorder.isEvaluating {
@@ -78,10 +101,21 @@ struct RecordView: View {
                 // 記録の前に忘れやすいこと(折りたためる。開閉は覚えておく)
                 DisclosureGroup(isExpanded: $showChecklist) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("・DJI の録画を先に始めてから「記録開始」(同期の合図が動画に入る)")
-                        Text("・DJI Mic のマイク表示・SD の空き・電池を確認")
-                        Text("・空が見える所で、GPS 精度が ±10m 前後になってから発進")
-                        Text("・停止は走り終えてから(途中で押すと走行が分かれます)")
+                        if mode.isCar {
+                            Text("・DJI の録画を先に始めてから「記録開始」(同期の合図が動画に入る)")
+                            Text("・DJI Mic のマイク表示・SD の空き・電池を確認")
+                            Text("・空が見える所で、GPS 精度が ±10m 前後になってから発進")
+                            Text("・停止は走り終えてから(途中で押すと走行が分かれます)")
+                        } else {
+                            Text("・\(mode.title)の記録は地図(国道の判定)には送りません。運転評価もしません")
+                            Text("・記録中は音を鳴らしません")
+                            if mode == .plane {
+                                Text("・機内モードでも GPS は使えます。窓際でないとほとんど測位できません")
+                                Text("・最初の測位に数分かかることがあります。乗る前に始めておくと確実です")
+                            } else {
+                                Text("・地下やトンネルでは途切れます。窓際のほうが測位しやすいです")
+                            }
+                        }
                     }
                     .font(.caption).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -92,11 +126,21 @@ struct RecordView: View {
                 .padding(10)
                 .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
             } else {
-                Text("停止は走り終えてから(途中で押すと走行が分かれます)")
+                Text(mode.isCar ? "停止は走り終えてから(途中で押すと走行が分かれます)"
+                                : "\(mode.title)の移動を記録中(地図には送りません)")
                     .font(.caption2).foregroundStyle(.secondary)
             }
 
-            if recorder.isRecording {
+            if !recorder.isRecording {
+                Picker("移動手段", selection: $settings.travelMode) {
+                    ForEach(TravelMode.allCases) { m in
+                        Text(m.title).tag(m)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
+            if recorder.isRecording && mode.isCar {
                 HStack(spacing: 12) {
                     bigButton("目印", systemImage: "mappin", color: .blue) { recorder.addMarker("mark") }
                     bigButton("同期", systemImage: "camera.metering.center.weighted", color: .purple) {
@@ -118,9 +162,13 @@ struct RecordView: View {
             Button("停止する", role: .destructive) { recorder.stopWithSync() }
             Button("記録を続ける", role: .cancel) {}
         } message: {
-            Text("止める直前に同期の合図(光と音)を出します。DJI の録画はそのあとで止めてください")
+            Text(mode.isCar ? "止める直前に同期の合図(光と音)を出します。DJI の録画はそのあとで止めてください"
+                            : "\(mode.title)の移動の記録を止めます")
         }
     }
+
+    /// 記録中はその移動手段、止めているときは次に記録する移動手段
+    private var mode: TravelMode { recorder.isRecording ? recorder.mode : settings.travelMode }
 
     @State private var confirmStop = false
     @AppStorage("showChecklist") private var showChecklist = true
