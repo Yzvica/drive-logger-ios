@@ -22,11 +22,13 @@ struct SettingsView: View {
                     Text("外出先からは、Tailscale をつないで MiniPC の Tailscale のアドレス(http://100.x.x.x:8080 など)を入れてください。")
                 }
                 Section {
+                    Toggle("音を鳴らさない(画面で知らせる)", isOn: $settings.soundOff)
                     Toggle("急な操作を音で知らせる", isOn: $settings.coachSound)
+                        .disabled(settings.soundOff)
                 } header: {
                     Text("記録中のサポート")
                 } footer: {
-                    Text("急ブレーキは下がる音、急加速は上がる音、急ハンドルは短く2回、そのほかの急な操作は短く1回、止まり際のカックンは低い音。音は DJI Mic にも入ります。")
+                    Text("急ブレーキは下がる音、急加速は上がる音、急ハンドルは短く2回、そのほかの急な操作は短く1回、止まり際のカックンは低い音。音は DJI Mic にも入ります。「音を鳴らさない」にすると、記録開始・停止の同期の合図も含めて音を出さず、画面の上に文字で出します(動画との時刻合わせは DriveLog のジャイロの波形合わせで行えます)。")
                 }
                 Section {
                     Toggle("GPS が切れた・戻ったらバイブ", isOn: $settings.gpsVibrate)

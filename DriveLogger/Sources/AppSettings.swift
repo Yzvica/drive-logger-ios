@@ -56,8 +56,14 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    /// 音を一切鳴らさず、画面の表示だけで知らせる(同期・目印・停止・急な操作)
+    @Published var soundOff: Bool {
+        didSet { UserDefaults.standard.set(soundOff, forKey: "soundOff") }
+    }
+
     private init() {
         let d = UserDefaults.standard
+        soundOff = d.bool(forKey: "soundOff")
         uploadWifiOnly = d.object(forKey: "uploadWifiOnly") as? Bool ?? true
         gpsVibrate = d.object(forKey: "gpsVibrate") as? Bool ?? true
         travelMode = d.string(forKey: "travelMode").flatMap(TravelMode.init(rawValue:)) ?? .car

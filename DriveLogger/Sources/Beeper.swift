@@ -46,6 +46,8 @@ final class Beeper {
     /// 鳴らした時刻(音の出だし)を返す。オーディオの準備に失敗したときは nil
     @discardableResult
     func play(_ kind: Kind) -> Date? {
+        // 「音を鳴らさない」設定のときは鳴らさない(呼んだ側が画面で知らせる)
+        if AppSettings.shared.soundOff { return nil }
         configure()
         guard let p = player(kind) else { return nil }
         p.currentTime = 0

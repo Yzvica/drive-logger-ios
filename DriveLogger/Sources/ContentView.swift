@@ -13,6 +13,20 @@ struct ContentView: View {
                 SettingsView()
                     .tabItem { Label("設定", systemImage: "gearshape") }
             }
+            // 「音を鳴らさない」設定のときの知らせ(画面の上に少しのあいだ出す)
+            if let n = recorder.notice {
+                VStack {
+                    Text(n.text)
+                        .font(.title2.bold())
+                        .padding(.horizontal, 20).padding(.vertical, 12)
+                        .background(.orange, in: Capsule())
+                        .foregroundStyle(.white)
+                        .padding(.top, 8)
+                    Spacer()
+                }
+                .allowsHitTesting(false)
+                .transition(.opacity)
+            }
             // 動画と合わせる合図: 画面全体を白く光らせる
             if recorder.flash {
                 Color.white.ignoresSafeArea().allowsHitTesting(false)

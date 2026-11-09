@@ -35,7 +35,13 @@ struct RecordView: View {
                 Text(Display.kmh(recorder.speedMS))
                     .font(.system(size: 72, weight: .bold, design: .rounded))
                     .monospacedDigit()
-                Text("km/h").font(.title3).foregroundStyle(.secondary)
+                    .foregroundStyle(recorder.speedEstimated ? .secondary : .primary)
+                VStack(alignment: .leading, spacing: 0) {
+                    if recorder.speedEstimated {
+                        Text("推定").font(.caption.bold()).foregroundStyle(.orange)
+                    }
+                    Text("km/h").font(.title3).foregroundStyle(.secondary)
+                }
             }
 
             HStack {
