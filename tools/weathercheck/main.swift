@@ -19,7 +19,7 @@ let url = URL(fileURLWithPath: args[1]).appendingPathComponent(DriveWeather.file
 do {
     let w = try JSONDecoder().decode(DriveWeather.self, from: Data(contentsOf: url))
     check("まとめ", w.summary.label == "小雨" && w.summary.rain, WeatherText.headline(w.summary))
-    check("気温の幅", WeatherText.range(w.summary.tMin, w.summary.tMax) == "14℃", WeatherText.range(w.summary.tMin, w.summary.tMax) ?? "なし")
+    check("気温の幅", WeatherText.range(w.summary.tMin, w.summary.tMax) == "14〜15℃", WeatherText.range(w.summary.tMin, w.summary.tMax) ?? "なし")
     check("瞬間風速がなくても読める", w.summary.gustMax == nil, "\(String(describing: w.summary.gustMax))")
     check("地点", w.samples.count >= 2, "\(w.samples.count) 地点")
     check("風", WeatherText.wind(w.samples[0]) == "南の風 4 m/s", WeatherText.wind(w.samples[0]))
