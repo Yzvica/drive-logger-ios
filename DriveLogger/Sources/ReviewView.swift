@@ -100,11 +100,19 @@ struct ReviewView: View {
                 }
             }
         }
-        .task { await load() }
+        .task {
+            await load()
+            // 地図サーバーがトンネルの区間を補っていれば受け取り、読み直す
+            let folder = store.dir(meta.id)
+            if !FileManager.default.fileExists(atPath: folder.appendingPathComponent(ReviewLoader.filledFile).path),
+               await Uploader.shared.fetchFilled(meta) {
+                await load(force: true)
+            }
+        }
     }
 
-    private func load() async {
-        guard data == nil else { return }
+    private func load(force: Bool = false) async {
+        guard data == nil || force else { return }
         let folder = store.dir(meta.id)
         let motion = meta.travelMode.isCar
         let pressure = meta.travelMode != .plane

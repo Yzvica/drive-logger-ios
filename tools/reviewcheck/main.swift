@@ -39,4 +39,45 @@ let road = (0..<100).map { Double($0) * 8 }
 check("車の坂道の気圧は使う", ReviewLoader.pressureMatchesGPS(pressure: road, gps: road.map { $0 + 15 }), "800 m")
 check("平地(GPS の揺れだけ)の気圧は使う", ReviewLoader.pressureMatchesGPS(pressure: [0, 1, 2], gps: [30, 80, 10]), "変化 70 m")
 
+// トンネルを補った location_filled.csv: 途中の 60 秒を「補った点」(精度・GPS の速度が空、推定の速度あり)にしても読める
+let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("reviewcheck-filled-\(getpid())")
+try? FileManager.default.removeItem(at: tmp)
+try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+for name in ["location.csv", "motion.csv"] {
+    try FileManager.default.copyItem(at: folder.appendingPathComponent(name), to: tmp.appendingPathComponent(name))
+}
+let locText = try String(contentsOf: folder.appendingPathComponent("location.csv"), encoding: .utf8)
+var locLines = locText.split(whereSeparator: \.isNewline).map(String.init)
+let head = locLines.removeFirst().split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+let ci = { (n: String) in head.firstIndex(of: n)! }
+let t0 = Double(locLines[0].split(separator: ",", omittingEmptySubsequences: false)[ci("unix_s")])!
+var filledLines = [(head + (head.contains("speed_est_ms") ? [] : ["speed_est_ms"]) + ["src"]).joined(separator: ",")]
+var roadRows = 0
+for line in locLines {
+    var f = line.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+    while f.count < head.count { f.append("") }
+    var est = ""
+    var src = "gps"
+    let t = Double(f[ci("unix_s")]) ?? 0
+    if t - t0 > 60 && t - t0 <= 120 {
+        est = f[ci("speed_ms")]
+        f[ci("h_acc_m")] = ""
+        f[ci("speed_ms")] = ""
+        src = "road"
+        roadRows += 1
+    }
+    if !head.contains("speed_est_ms") { f.append(est) } else { f[ci("speed_est_ms")] = est }
+    f.append(src)
+    filledLines.append(f.joined(separator: ","))
+}
+try (filledLines.joined(separator: "\n") + "\n").write(to: tmp.appendingPathComponent(ReviewLoader.filledFile), atomically: true, encoding: .utf8)
+let filled = try ReviewLoader.load(folder: tmp, motion: true)
+let fs = filled.samples
+check("補った点を含めて読める", roadRows > 30 && fs.count >= 2 && abs((fs.last?.km ?? 0) - (s.last?.km ?? 0)) < max(0.05, (s.last?.km ?? 0) * 0.05),
+      String(format: "補った点 %d / %.2f km(元 %.2f km)", roadRows, fs.last?.km ?? 0, s.last?.km ?? 0))
+let filledKmh = fs.filter { $0.unix - t0 > 70 && $0.unix - t0 < 110 }.map(\.kmh).max() ?? 0
+let origKmh = s.filter { $0.unix - t0 > 70 && $0.unix - t0 < 110 }.map(\.kmh).max() ?? 0
+check("補った区間の速度は推定の速度", abs(filledKmh - origKmh) < 1, String(format: "%.1f km/h(元 %.1f km/h)", filledKmh, origKmh))
+try? FileManager.default.removeItem(at: tmp)
+
 exit(failed ? 1 : 0)
