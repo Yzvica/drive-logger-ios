@@ -165,9 +165,20 @@ final class Uploader: ObservableObject {
     /// 地図サーバーが、トンネルなどで GPS が途切れた区間を道路に沿って補った位置(location_filled.csv)を受け取り、
     /// 走行フォルダに保存する。まだ補っていない・つながらないときは false(次に振り返りを開いたときにまた試す)
     func fetchFilled(_ meta: SessionMeta) async -> Bool {
+        await fetchServerFile(meta, name: ReviewLoader.filledFile)
+    }
+
+    /// 地図サーバーが走り終えたあとに取った天気(weather.json)を受け取り、走行フォルダに保存する。
+    /// まだ取っていない・つながらないときは false(次にログを開いたときにまた試す)
+    func fetchWeather(_ meta: SessionMeta) async -> Bool {
+        await fetchServerFile(meta, name: DriveWeather.fileName)
+    }
+
+    /// 地図サーバーが走行フォルダに作ったファイルを GET /api/rawlog で受け取り、端末の走行フォルダに保存する
+    private func fetchServerFile(_ meta: SessionMeta, name: String) async -> Bool {
         guard online, let base = AppSettings.shared.baseURL, meta.rawSent.contains("meta.json") else { return false }
         var c = URLComponents(url: base.appendingPathComponent("api/rawlog"), resolvingAgainstBaseURL: false)!
-        c.queryItems = [URLQueryItem(name: "session", value: meta.id), URLQueryItem(name: "file", value: ReviewLoader.filledFile)]
+        c.queryItems = [URLQueryItem(name: "session", value: meta.id), URLQueryItem(name: "file", value: name)]
         if !meta.travelMode.isCar { c.queryItems?.append(URLQueryItem(name: "kind", value: "trip")) }
         var req = URLRequest(url: c.url!)
         // 自宅の外(サーバーに届かない所)で待たされないよう短めにする
@@ -175,7 +186,7 @@ final class Uploader: ObservableObject {
         guard let result = try? await session.data(for: req),
               (result.1 as? HTTPURLResponse)?.statusCode == 200, !result.0.isEmpty else { return false }
         let data = result.0
-        let file = LogStore.shared.dir(meta.id).appendingPathComponent(ReviewLoader.filledFile)
+        let file = LogStore.shared.dir(meta.id).appendingPathComponent(name)
         return (try? data.write(to: file, options: .atomic)) != nil
     }
 

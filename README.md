@@ -18,6 +18,7 @@
 | pressure.csv | 気圧(hPa)・記録開始からの相対高度(m) | 約1Hz |
 | meta.json | 端末・時刻の対応・距離・目印(目印 / 動画の同期)・送信状況 | - |
 | evaluation.json | 運転の評価(停止後に計算。DriveLog の evaluation.json と同じ形、`source: "iphone"`) | - |
+| weather.json | 走ったときの天気(地図サーバーが Open-Meteo から取ったものを、ログの詳細を開いたときに受け取る。飛行機はなし) | - |
 
 時刻はどれも UNIX 秒(UTC)。
 
