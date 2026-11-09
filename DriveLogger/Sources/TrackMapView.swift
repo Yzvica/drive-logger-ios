@@ -43,7 +43,8 @@ struct TrackMapView: UIViewRepresentable {
         map.delegate = context.coordinator
         map.showsUserLocation = true
         map.pointOfInterestFilter = .excludingAll
-        map.showsCompass = true
+        // 標準の方位磁針は右上の追尾ボタンに重なるので消し、ボタンの下に自分で置く
+        map.showsCompass = false
         map.setUserTrackingMode(headingUp ? .followWithHeading : .follow, animated: false)
 
         let button = MKUserTrackingButton(mapView: map)
@@ -51,6 +52,11 @@ struct TrackMapView: UIViewRepresentable {
         button.layer.cornerRadius = 8
         button.translatesAutoresizingMaskIntoConstraints = false
         map.addSubview(button)
+
+        let compass = MKCompassButton(mapView: map)
+        compass.compassVisibility = .adaptive // 北が上でないときだけ出す
+        compass.translatesAutoresizingMaskIntoConstraints = false
+        map.addSubview(compass)
 
         let credit = UILabel()
         credit.text = "出典: 国土地理院"
@@ -65,6 +71,8 @@ struct TrackMapView: UIViewRepresentable {
         NSLayoutConstraint.activate([
             button.topAnchor.constraint(equalTo: map.topAnchor, constant: 8),
             button.trailingAnchor.constraint(equalTo: map.trailingAnchor, constant: -8),
+            compass.topAnchor.constraint(equalTo: button.bottomAnchor, constant: 8),
+            compass.centerXAnchor.constraint(equalTo: button.centerXAnchor),
             credit.trailingAnchor.constraint(equalTo: map.trailingAnchor, constant: -4),
             credit.bottomAnchor.constraint(equalTo: map.bottomAnchor, constant: -4),
         ])
