@@ -31,6 +31,16 @@ struct SettingsView: View {
                     Text("急ブレーキは下がる音、急加速は上がる音、急ハンドルは短く2回、そのほかの急な操作は短く1回、止まり際のカックンは低い音。音は DJI Mic にも入ります。「音を鳴らさない」にすると、記録開始・停止の同期の合図も含めて音を出さず、画面の上に文字で出します(動画との時刻合わせは DriveLog のジャイロの波形合わせで行えます)。")
                 }
                 Section {
+                    Picker("ダブルタップして上下", selection: $settings.oneFingerZoomDownIn) {
+                        Text("下で拡大(Google マップ)").tag(true)
+                        Text("上で拡大(Apple の標準)").tag(false)
+                    }
+                } header: {
+                    Text("地図")
+                } footer: {
+                    Text("地図をダブルタップして指を離さずに上下に動かしたときの、拡大縮小の向き")
+                }
+                Section {
                     Toggle("GPS が切れた・戻ったらバイブ", isOn: $settings.gpsVibrate)
                 } header: {
                     Text("GPS の受信状態")

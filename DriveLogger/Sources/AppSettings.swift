@@ -61,8 +61,15 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(soundOff, forKey: "soundOff") }
     }
 
+    /// 地図をダブルタップして上下に動かす拡大縮小で、下に動かすと拡大する(Google マップと同じ向き)。
+    /// false なら Apple の地図の標準のまま
+    @Published var oneFingerZoomDownIn: Bool {
+        didSet { UserDefaults.standard.set(oneFingerZoomDownIn, forKey: "oneFingerZoomDownIn") }
+    }
+
     private init() {
         let d = UserDefaults.standard
+        oneFingerZoomDownIn = d.object(forKey: "oneFingerZoomDownIn") as? Bool ?? true
         soundOff = d.bool(forKey: "soundOff")
         uploadWifiOnly = d.object(forKey: "uploadWifiOnly") as? Bool ?? true
         gpsVibrate = d.object(forKey: "gpsVibrate") as? Bool ?? true

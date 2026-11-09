@@ -7,7 +7,8 @@ struct RecordView: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            TrackMapView(track: recorder.track, style: settings.mapStyle, headingUp: $settings.mapHeadingUp)
+            TrackMapView(track: recorder.track, style: settings.mapStyle, headingUp: $settings.mapHeadingUp,
+                         zoomDownIn: settings.oneFingerZoomDownIn)
                 .frame(maxWidth: .infinity)
                 .frame(minHeight: 160, idealHeight: 240, maxHeight: 280)
                 .overlay(alignment: .topLeading) {
