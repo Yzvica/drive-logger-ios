@@ -107,8 +107,9 @@ struct ReviewView: View {
         guard data == nil else { return }
         let folder = store.dir(meta.id)
         let motion = meta.travelMode.isCar
+        let pressure = meta.travelMode != .plane
         let result: Result<ReviewData, Error> = await Task.detached(priority: .userInitiated) {
-            Result { try ReviewLoader.load(folder: folder, motion: motion) }
+            Result { try ReviewLoader.load(folder: folder, motion: motion, pressure: pressure) }
         }.value
         switch result {
         case .success(let d):
@@ -126,7 +127,8 @@ struct ReviewView: View {
 
     private func content(_ d: ReviewData) -> some View {
         VStack(spacing: 0) {
-            ReviewMapView(samples: d.samples, events: events, style: settings.mapStyle, cursor: cursor, focus: focus) { i in
+            ReviewMapView(samples: d.samples, events: events, style: settings.mapStyle, cursor: cursor, focus: focus,
+                          zoomDownIn: settings.oneFingerZoomDownIn) { i in
                 cursor = i
             }
             .frame(maxHeight: .infinity)
@@ -254,6 +256,28 @@ struct ReviewChart: View {
 
     private func x(_ s: ReviewSample) -> Double { byDistance ? s.km : s.t / 60 }
 
+    /// 横軸の範囲(走行の最初から最後まで。カーソルや出来事の線で広がらないよう固定する)
+    private var xDomain: ClosedRange<Double> {
+        let hi = data.samples.last.map(x) ?? 1
+        return 0...max(hi, 0.01)
+    }
+
+    /// 縦軸の範囲(値と目安の線が収まる幅。少し余白を付ける)
+    private func yDomain(_ ys: [Double]) -> ClosedRange<Double> {
+        var lo = min(ys.min() ?? 0, guides.min() ?? .infinity)
+        var hi = max(ys.max() ?? 1, guides.max() ?? -.infinity)
+        if lo >= 0 && lo < (hi - lo) * 0.5 { lo = 0 } // 速度や高度は 0 から
+        if hi - lo < 1e-6 { hi = lo + 1 }
+        let pad = (hi - lo) * 0.05
+        return (lo == 0 ? 0 : lo - pad)...(hi + pad)
+    }
+
+    /// カーソルの時点の値(グラフの左上の見出しに出す)
+    private var cursorText: String {
+        guard let i = cursor, data.samples.indices.contains(i), let v = value(data.samples[i]) else { return "" }
+        return "  " + format(v)
+    }
+
     var body: some View {
         let pts = data.samples.compactMap { s in value(s).map { (x: x(s), y: $0) } }
         let eventXs = events.map { e -> Double in
@@ -280,15 +304,10 @@ struct ReviewChart: View {
                 RuleMark(x: .value("選択", x(data.samples[i])))
                     .foregroundStyle(Color.purple)
                     .lineStyle(StrokeStyle(lineWidth: 1.5))
-                    .annotation(position: .top, alignment: .center, spacing: 0) {
-                        if let v = value(data.samples[i]) {
-                            Text(format(v)).font(.caption2.bold()).monospacedDigit()
-                                .padding(.horizontal, 4)
-                                .background(.background.opacity(0.8), in: RoundedRectangle(cornerRadius: 4))
-                        }
-                    }
             }
         }
+        .chartXScale(domain: xDomain)
+        .chartYScale(domain: yDomain(pts.map(\.y)))
         .chartXAxis {
             AxisMarks(values: .automatic(desiredCount: 5)) { v in
                 AxisGridLine()
@@ -306,15 +325,19 @@ struct ReviewChart: View {
                     .gesture(
                         DragGesture(minimumDistance: 0)
                             .onChanged { g in
-                                let origin = geo[proxy.plotAreaFrame].origin
-                                guard let xv: Double = proxy.value(atX: g.location.x - origin.x) else { return }
+                                let plot = geo[proxy.plotAreaFrame]
+                                // グラフの外まで指が出ても、端の点に留める
+                                let px = min(max(g.location.x - plot.origin.x, 0), plot.width)
+                                guard let xv: Double = proxy.value(atX: px) else { return }
                                 cursor = byDistance ? data.index(atKm: xv) : data.index(atT: xv * 60)
                             }
                     )
             }
         }
         .overlay(alignment: .topLeading) {
-            Text("\(title)(\(unit))").font(.caption2).foregroundStyle(.secondary)
+            (Text("\(title)(\(unit))").foregroundColor(.secondary)
+                + Text(cursorText).bold().foregroundColor(.purple))
+                .font(.caption2).monospacedDigit()
                 .padding(.leading, 28)
                 .allowsHitTesting(false)
         }

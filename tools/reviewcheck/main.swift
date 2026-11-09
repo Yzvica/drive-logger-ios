@@ -31,4 +31,12 @@ check("距離から点を探す", car.index(atKm: 1e9) == s.count - 1 && car.ind
 let trip = try ReviewLoader.load(folder: folder, motion: false)
 check("車以外は加速度を使わない", !trip.hasMotion && trip.samples.allSatisfy { $0.lonG == nil }, "\(trip.samples.count) 点")
 
+// 飛行機: 機内は与圧されていて、GPS で 10,000 m 上っても気圧の高度は 2,000 m ほどしか変わらない
+let cabin = (0..<100).map { Double($0) * 20 }      // 0〜1,980 m
+let gpsPlane = (0..<100).map { Double($0) * 120 }  // 0〜11,880 m
+check("与圧された機内の気圧は使わない", !ReviewLoader.pressureMatchesGPS(pressure: cabin, gps: gpsPlane), "気圧 2,000 m / GPS 12,000 m")
+let road = (0..<100).map { Double($0) * 8 }
+check("車の坂道の気圧は使う", ReviewLoader.pressureMatchesGPS(pressure: road, gps: road.map { $0 + 15 }), "800 m")
+check("平地(GPS の揺れだけ)の気圧は使う", ReviewLoader.pressureMatchesGPS(pressure: [0, 1, 2], gps: [30, 80, 10]), "変化 70 m")
+
 exit(failed ? 1 : 0)

@@ -57,8 +57,9 @@ struct ReviewData {
 }
 
 enum ReviewLoader {
-    /// 走行フォルダを読む。motion = false(車以外)なら加速度は読まない
-    static func load(folder: URL, motion: Bool) throws -> ReviewData {
+    /// 走行フォルダを読む。motion = false(車以外)なら加速度は読まない。
+    /// pressure = false なら高度に気圧を使わない(飛行機は機内が与圧されていて、気圧が外の高度と合わないため)
+    static func load(folder: URL, motion: Bool, pressure: Bool = true) throws -> ReviewData {
         let locURL = folder.appendingPathComponent("location.csv")
         let rows = try DriveEval.readCSV(locURL, columns: ["unix_s", "lat", "lon", "alt_m", "h_acc_m", "v_acc_m", "speed_ms"])
         var gps: [(t: Double, la: Double, lo: Double, alt: Double?, sp: Double?)] = []
@@ -82,7 +83,7 @@ enum ReviewLoader {
         guard let d0 = dense.first else { throw DriveEvalError.noData }
 
         // 高度: 気圧の相対高度に、GPS の高度との差(中央値)を足す
-        let alt = altitude(folder: folder, gps: gps.compactMap { g in g.alt.map { (g.t, $0) } })
+        let alt = altitude(folder: folder, gps: gps.compactMap { g in g.alt.map { (g.t, $0) } }, usePressure: pressure)
 
         // 区切りごとにまとめる。速度・位置は平均、G と躍度は絶対値が一番大きいもの(山を見逃さないため)
         let span = (dense.last?.t ?? d0.t) - d0.t
@@ -151,14 +152,14 @@ enum ReviewLoader {
         }
     }
 
-    static func altitude(folder: URL, gps: [(Double, Double)]) -> Altitude? {
+    static func altitude(folder: URL, gps: [(Double, Double)], usePressure: Bool = true) -> Altitude? {
         let url = folder.appendingPathComponent("pressure.csv")
-        let rows = (try? DriveEval.readCSV(url, columns: ["unix_s", "rel_alt_m"])) ?? []
+        let rows = usePressure ? ((try? DriveEval.readCSV(url, columns: ["unix_s", "rel_alt_m"])) ?? []) : []
         let pr = rows.compactMap { r -> (Double, Double)? in
             guard let t = r[0], let a = r[1] else { return nil }
             return (t, a)
         }.sorted { $0.0 < $1.0 }
-        if pr.count >= 2 {
+        if pr.count >= 2, pressureMatchesGPS(pressure: pr.map(\.1), gps: gps.map(\.1)) {
             let pts = pr.map(\.0), pas = pr.map(\.1)
             let rel = Altitude(ts: pts, alts: pas, fromPressure: true)
             // GPS の高度との差の中央値で、気圧の相対高度を海抜にそろえる(GPS が無ければ開始地点を 0 m)
@@ -168,6 +169,15 @@ enum ReviewLoader {
         }
         guard gps.count >= 2 else { return nil }
         return Altitude(ts: gps.map(\.0), alts: gps.map(\.1), fromPressure: false)
+    }
+
+    /// 気圧の高度の変化が GPS の高度の変化と大きく食い違っていないか。
+    /// 与圧された乗り物の中などでは、GPS で数千 m 上っても気圧はあまり変わらない
+    static func pressureMatchesGPS(pressure: [Double], gps: [Double]) -> Bool {
+        guard let gLo = DriveEval.pct(gps, 0.05), let gHi = DriveEval.pct(gps, 0.95),
+              let pLo = DriveEval.pct(pressure, 0.05), let pHi = DriveEval.pct(pressure, 0.95) else { return true }
+        let g = gHi - gLo, p = pHi - pLo
+        return g < 300 || p > g * 0.5
     }
 
     /// 2 点間の距離(m)
