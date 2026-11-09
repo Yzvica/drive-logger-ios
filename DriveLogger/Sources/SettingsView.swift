@@ -56,6 +56,12 @@ struct SettingsView: View {
                 } footer: {
                     Text("Wi-Fi のときだけにすると、SIM のモバイル通信では自動で送りません(テザリングは Wi-Fi 扱いで送ります)。ログ画面の「未送信のログを送る」はモバイル通信でも送ります。")
                 }
+                Section("このアプリについて") {
+                    LabeledContent("バージョン", value: AppInfo.version)
+                    if let commit = AppInfo.commit {
+                        LabeledContent("コミット", value: commit)
+                    }
+                }
             }
             .navigationTitle("設定")
         }
@@ -70,5 +76,21 @@ struct SettingsView: View {
         } catch {
             testResult = "つながりません: \(error.localizedDescription)"
         }
+    }
+}
+
+/// アプリのバージョン。ビルド番号は CI の実行番号(GitHub Actions の Run 番号)、コミットは CI がビルドしたもの
+enum AppInfo {
+    private static var info: [String: Any] { Bundle.main.infoDictionary ?? [:] }
+
+    static var version: String {
+        let v = info["CFBundleShortVersionString"] as? String ?? "?"
+        let b = info["CFBundleVersion"] as? String ?? "?"
+        return "\(v)(ビルド \(b))"
+    }
+
+    static var commit: String? {
+        guard let c = info["GitCommit"] as? String, !c.isEmpty else { return nil }
+        return c
     }
 }

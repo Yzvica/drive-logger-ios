@@ -20,6 +20,8 @@ targets:
       path: DriveLogger/Info.plist
       properties:
         CFBundleDisplayName: 走行ロガー
+        # CI がビルドしたコミット(設定画面のバージョンに出す)
+        GitCommit: $(GIT_COMMIT)
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
