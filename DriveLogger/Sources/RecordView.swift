@@ -7,9 +7,10 @@ struct RecordView: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            TrackMapView(track: recorder.track, style: settings.mapStyle, headingUp: $settings.mapHeadingUp)
+            TrackMapView(track: recorder.track, style: settings.mapStyle, headingUp: $settings.mapHeadingUp,
+                         zoomDownIn: settings.oneFingerZoomDownIn)
                 .frame(maxWidth: .infinity)
-                .frame(minHeight: 180)
+                .frame(minHeight: 160, idealHeight: 240, maxHeight: 280)
                 .overlay(alignment: .topLeading) {
                     Menu {
                         Picker("地図", selection: $settings.mapStyle) {
@@ -23,13 +24,28 @@ struct RecordView: View {
                     }
                     .padding(8)
                 }
+                .overlay(alignment: .bottomTrailing) {
+                    // 右上は追尾ボタンと方位磁針、右下の端は地理院の出典なので、その少し上に出す
+                    if recorder.isRecording {
+                        GPSLamp(status: recorder.gpsStatus).padding(.trailing, 8).padding(.bottom, 24)
+                    }
+                }
                 .clipShape(RoundedRectangle(cornerRadius: 12))
 
+            // 地図と下のボタンのあいだはスクロールできるようにする(まとめや「記録の前に」が増えてもボタンに重ならない)
+            ScrollView {
+            VStack(spacing: 16) {
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Text(Display.kmh(recorder.speedMS))
                     .font(.system(size: 72, weight: .bold, design: .rounded))
                     .monospacedDigit()
-                Text("km/h").font(.title3).foregroundStyle(.secondary)
+                    .foregroundStyle(recorder.speedEstimated ? .secondary : .primary)
+                VStack(alignment: .leading, spacing: 0) {
+                    if recorder.speedEstimated {
+                        Text("推定").font(.caption.bold()).foregroundStyle(.orange)
+                    }
+                    Text("km/h").font(.title3).foregroundStyle(.secondary)
+                }
             }
 
             HStack {
@@ -95,8 +111,6 @@ struct RecordView: View {
                 }
             }
 
-            Spacer(minLength: 0)
-
             if !recorder.isRecording {
                 // 記録の前に忘れやすいこと(折りたためる。開閉は覚えておく)
                 DisclosureGroup(isExpanded: $showChecklist) {
@@ -109,6 +123,9 @@ struct RecordView: View {
                         } else {
                             Text("・\(mode.title)の記録は地図(国道の判定)には送りません。運転評価もしません")
                             Text("・記録中は音を鳴らしません")
+                            if mode == .ride {
+                                Text("・バス・タクシー・人の運転する車など、自分が運転していない車の移動に使います")
+                            }
                             if mode == .plane {
                                 Text("・機内モードでも GPS は使えます。窓際でないとほとんど測位できません")
                                 Text("・最初の測位に数分かかることがあります。乗る前に始めておくと確実です")
@@ -129,6 +146,10 @@ struct RecordView: View {
                 Text(mode.isCar ? "停止は走り終えてから(途中で押すと走行が分かれます)"
                                 : "\(mode.title)の移動を記録中(地図には送りません)")
                     .font(.caption2).foregroundStyle(.secondary)
+            }
+
+            }
+            .padding(.vertical, 4)
             }
 
             if !recorder.isRecording {

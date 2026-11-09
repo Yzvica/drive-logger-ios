@@ -35,13 +35,16 @@ struct TrackMapView: UIViewRepresentable {
     var style: MapStyle
     /// 追尾の向き(true なら進行方向が上)。ボタンで切り替えると書き換わる
     @Binding var headingUp: Bool
+    /// ダブルタップして上下に動かす拡大縮小を、下で拡大(Google マップと同じ)にする
+    var zoomDownIn: Bool = false
 
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
         map.delegate = context.coordinator
         map.showsUserLocation = true
         map.pointOfInterestFilter = .excludingAll
-        map.showsCompass = true
+        // 標準の方位磁針は右上の追尾ボタンに重なるので消し、ボタンの下に自分で置く
+        map.showsCompass = false
         map.setUserTrackingMode(headingUp ? .followWithHeading : .follow, animated: false)
 
         let button = MKUserTrackingButton(mapView: map)
@@ -49,6 +52,11 @@ struct TrackMapView: UIViewRepresentable {
         button.layer.cornerRadius = 8
         button.translatesAutoresizingMaskIntoConstraints = false
         map.addSubview(button)
+
+        let compass = MKCompassButton(mapView: map)
+        compass.compassVisibility = .adaptive // 北が上でないときだけ出す
+        compass.translatesAutoresizingMaskIntoConstraints = false
+        map.addSubview(compass)
 
         let credit = UILabel()
         credit.text = "出典: 国土地理院"
@@ -63,16 +71,29 @@ struct TrackMapView: UIViewRepresentable {
         NSLayoutConstraint.activate([
             button.topAnchor.constraint(equalTo: map.topAnchor, constant: 8),
             button.trailingAnchor.constraint(equalTo: map.trailingAnchor, constant: -8),
+            compass.topAnchor.constraint(equalTo: button.bottomAnchor, constant: 8),
+            compass.centerXAnchor.constraint(equalTo: button.centerXAnchor),
             credit.trailingAnchor.constraint(equalTo: map.trailingAnchor, constant: -4),
             credit.bottomAnchor.constraint(equalTo: map.bottomAnchor, constant: -4),
         ])
         apply(style, to: map, context: context)
+
+        // ダブルタップして上下に動かす拡大縮小を自前で行う(向きを選べるようにするため)
+        let zoom = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.oneFingerZoom(_:)))
+        zoom.numberOfTapsRequired = 1
+        zoom.minimumPressDuration = 0
+        zoom.delegate = context.coordinator
+        zoom.isEnabled = false
+        map.addGestureRecognizer(zoom)
+        context.coordinator.zoomGesture = zoom
+        DispatchQueue.main.async { context.coordinator.applyZoomDirection(map) }
         return map
     }
 
     func updateUIView(_ map: MKMapView, context: Context) {
         context.coordinator.parent = self
         if context.coordinator.style != style { apply(style, to: map, context: context) }
+        if context.coordinator.appliedZoomDownIn != zoomDownIn { context.coordinator.applyZoomDirection(map) }
 
         // 点が増えるたびに作り直すと重いので、10点ごとに線を引き直す
         let c = context.coordinator
@@ -113,8 +134,13 @@ struct TrackMapView: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
-    final class Coordinator: NSObject, MKMapViewDelegate {
+    final class Coordinator: NSObject, MKMapViewDelegate, UIGestureRecognizerDelegate {
         var parent: TrackMapView
+        weak var zoomGesture: UILongPressGestureRecognizer?
+        var appliedZoomDownIn: Bool?
+        private var zoomStartY: CGFloat = 0
+        private var zoomStartDistance: CLLocationDistance = 0
+        private var zooming = false
         var drawnCount = 0
         var line: MKPolyline?
         var tiles: MKTileOverlay?
@@ -122,6 +148,59 @@ struct TrackMapView: UIViewRepresentable {
         weak var credit: UILabel?
 
         init(parent: TrackMapView) { self.parent = parent }
+
+        // MARK: ダブルタップして上下に動かす拡大縮小
+
+        /// MapKit が持っている片手ズーム(ダブルタップして上下)のジェスチャー。地図の中の部品に付いている
+        private func builtInOneFingerZoom(in view: UIView) -> [UIGestureRecognizer] {
+            var found = (view.gestureRecognizers ?? []).filter {
+                $0 !== zoomGesture && String(describing: type(of: $0)).range(of: "OneHanded", options: .caseInsensitive) != nil
+            }
+            for sub in view.subviews { found += builtInOneFingerZoom(in: sub) }
+            return found
+        }
+
+        /// 設定に合わせて、MapKit のものと自前のもののどちらを使うか切り替える。
+        /// MapKit のものが見つからなければ(iOS の版で名前が変わったときなど)、二重に動かないよう自前のものは使わない
+        func applyZoomDirection(_ map: MKMapView) {
+            let builtIn = builtInOneFingerZoom(in: map)
+            let useOwn = parent.zoomDownIn && !builtIn.isEmpty
+            builtIn.forEach { $0.isEnabled = !useOwn }
+            zoomGesture?.isEnabled = useOwn
+            // 地図の部品がまだできていなかったときは、あとでもう一度試す
+            appliedZoomDownIn = builtIn.isEmpty && parent.zoomDownIn ? nil : parent.zoomDownIn
+        }
+
+        func mapViewDidFinishLoadingMap(_ mapView: MKMapView) {
+            if appliedZoomDownIn == nil { applyZoomDirection(mapView) }
+        }
+
+        @objc func oneFingerZoom(_ g: UILongPressGestureRecognizer) {
+            guard let map = g.view as? MKMapView else { return }
+            let y = g.location(in: map).y
+            switch g.state {
+            case .began:
+                zoomStartY = y
+                zoomStartDistance = map.camera.centerCoordinateDistance
+                zooming = false
+            case .changed:
+                let dy = y - zoomStartY
+                // 少し動かすまでは拡大縮小しない(ふつうのダブルタップで拡大できるように)
+                if !zooming && abs(dy) < 8 { return }
+                zooming = true
+                // 下に動かすと近づく(拡大)。200pt でおよそ 7.4 倍
+                let d = zoomStartDistance * exp(-Double(dy) / 100)
+                let cam = map.camera.copy() as! MKMapCamera
+                cam.centerCoordinateDistance = max(50, min(d, 20_000_000))
+                map.setCamera(cam, animated: false)
+            default:
+                zooming = false
+            }
+        }
+
+        func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+            true
+        }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             if let tiles = overlay as? MKTileOverlay { return MKTileOverlayRenderer(tileOverlay: tiles) }

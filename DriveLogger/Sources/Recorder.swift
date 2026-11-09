@@ -18,6 +18,29 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published private(set) var mode: TravelMode = .car
     /// 直前に止めた車以外の移動(記録画面にまとめを出す)
     @Published var lastTrip: SessionMeta?
+    /// 速度を位置の動きから推定している(トンネルなどで GPS の速度が来ないとき)
+    @Published private(set) var speedEstimated = false
+    /// 画面の上に少しのあいだ出す知らせ(「音を鳴らさない」設定のときの代わり)
+    @Published private(set) var notice: (text: String, at: Date)?
+    /// 速度の推定に使う、ひとつ前の位置
+    private var prevForSpeed: CLLocation?
+    private var estimatedSpeed: Double = 0
+
+    /// 画面で知らせる(メインスレッドで呼ぶ)
+    func showNotice(_ text: String) {
+        let n = (text: text, at: Date())
+        notice = n
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            if self.notice?.at == n.at { self.notice = nil }
+        }
+    }
+
+    /// GPS の受信状態(記録中のランプ)
+    @Published private(set) var gpsStatus: GPSStatus = .searching
+    /// 最後に使える位置(±50m 以内)が来た時刻(端末の起動からの秒)
+    private var lastUsableFix: TimeInterval?
+    private var lastFixAccuracy: Double = -1
+    private var gpsTimer: Timer?
     @Published private(set) var track: [CLLocationCoordinate2D] = []
     @Published private(set) var authorization: CLAuthorizationStatus = .notDetermined
     @Published var flash = false
@@ -67,7 +90,13 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         if mode.isCar {
             let c = LiveCoach()
             c.onEvent = { e in
-                DispatchQueue.main.async { if AppSettings.shared.coachSound { Beeper.shared.play(.coach(e)) } }
+                DispatchQueue.main.async {
+                if AppSettings.shared.soundOff {
+                    Recorder.shared.showNotice(e.rawValue)
+                } else if AppSettings.shared.coachSound {
+                    Beeper.shared.play(.coach(e))
+                }
+            }
             }
             coach = c
         } else {
@@ -75,6 +104,9 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
         coachState = CoachState()
         altitudeM = nil
+        prevForSpeed = nil
+        estimatedSpeed = 0
+        speedEstimated = false
         location.activityType = mode.activityType
         if keepingAliveForUpload {
             keepingAliveForUpload = false
@@ -125,6 +157,7 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         track = []
         isRecording = true
         updateIdleTimer()
+        startGPSWatch()
 
         location.allowsBackgroundLocationUpdates = true
         location.showsBackgroundLocationIndicator = true
@@ -175,6 +208,7 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
         motion.stopDeviceMotionUpdates()
         altimeter.stopRelativeAltitudeUpdates()
+        stopGPSWatch()
         isRecording = false
         updateIdleTimer()
         motionQueue.waitUntilAllOperationsAreFinished()
@@ -197,7 +231,7 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
             if AppSettings.shared.autoUpload { Uploader.shared.uploadPending() }
             return
         }
-        Beeper.shared.play(.stop)
+        if Beeper.shared.play(.stop) == nil { showNotice("記録を止めました") }
         // 運転評価を計算してから送る(evaluation.json も一緒に送り、地図ですぐ見られるようにする)
         guard let id = finishedID else {
             if AppSettings.shared.autoUpload { Uploader.shared.uploadPending() }
@@ -256,10 +290,12 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         let played: Date?
         if kind == "sync" {
             played = Beeper.shared.play(.sync)
+            if played == nil { showNotice("同期の合図") }
             flash = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { self.flash = false }
         } else {
             played = Beeper.shared.play(.mark)
+            if played == nil { showNotice("目印を付けました") }
         }
         // 時刻は音が出た瞬間に合わせる(動画の音声から同期の合図を探すため)
         let marker = Marker(kind: kind, time: played ?? Date(), lat: loc?.coordinate.latitude, lon: loc?.coordinate.longitude)
@@ -332,11 +368,90 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
 
         DispatchQueue.main.async {
-            self.speedMS = speed ?? 0
+            self.lastFixAccuracy = acc
+            if acc <= GPSStatus.usableAccuracy { self.lastUsableFix = ProcessInfo.processInfo.systemUptime }
+            self.updateGPSStatus()
+            self.updateDisplayedSpeed(loc, speed: speed)
             self.horizontalAccuracy = loc.horizontalAccuracy
             self.altitudeM = altitude
             if good { self.track.append(loc.coordinate) }
             self.io.async { let m = self.meta; DispatchQueue.main.async { if self.isRecording { self.current = m } } }
+        }
+    }
+
+    // MARK: - 画面の速度
+
+    /// GPS の速度が来ないとき(トンネルの中で iOS が位置だけを推測で動かしているときなど)は、
+    /// ひとつ前の位置からの距離÷時間で速度を推定して出す。ファイルには推定値を書かない(画面だけ)
+    private func updateDisplayedSpeed(_ loc: CLLocation, speed: Double?) {
+        defer { prevForSpeed = loc }
+        if let s = speed {
+            speedMS = s
+            estimatedSpeed = s
+            speedEstimated = false
+            return
+        }
+        guard let prev = prevForSpeed else { speedMS = 0; return }
+        let dt = loc.timestamp.timeIntervalSince(prev.timestamp)
+        guard dt >= 0.5, dt <= 10 else {
+            if dt > 10 { speedMS = 0; speedEstimated = false }
+            return
+        }
+        let raw = loc.distance(from: prev) / dt
+        // 位置のぶれで跳ねないよう、少しならす
+        estimatedSpeed = estimatedSpeed * 0.6 + raw * 0.4
+        speedMS = estimatedSpeed
+        speedEstimated = true
+    }
+
+    // MARK: - GPS の受信状態
+
+    private func startGPSWatch() {
+        lastUsableFix = nil
+        lastFixAccuracy = -1
+        gpsStatus = .searching
+        gpsTimer?.invalidate()
+        // 位置が来なくなったことは位置の通知では分からないので、1秒ごとに確かめる
+        // (記録中は位置情報のバックグラウンド更新でアプリが起きているので、画面を消しても動く)
+        let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            guard let self, self.isRecording else { return }
+            self.updateGPSStatus()
+            Watchdog.arm(mode: self.mode)
+        }
+        RunLoop.main.add(t, forMode: .common)
+        gpsTimer = t
+        Watchdog.requestPermission()
+        Watchdog.arm(mode: mode, force: true)
+    }
+
+    private func stopGPSWatch() {
+        gpsTimer?.invalidate()
+        gpsTimer = nil
+        gpsStatus = .searching
+        Watchdog.disarm()
+    }
+
+    /// メインスレッドで呼ぶ
+    private func updateGPSStatus() {
+        guard isRecording else { return }
+        let next: GPSStatus
+        if let last = lastUsableFix {
+            if ProcessInfo.processInfo.systemUptime - last > GPSStatus.lostAfter {
+                next = .lost
+            } else {
+                next = lastFixAccuracy >= 0 && lastFixAccuracy <= GPSStatus.goodAccuracy ? .good : .weak
+            }
+        } else {
+            next = .searching
+        }
+        guard next != gpsStatus else { return }
+        let prev = gpsStatus
+        gpsStatus = next
+        guard AppSettings.shared.gpsVibrate else { return }
+        if next == .lost && prev.receiving {
+            GPSHaptics.lost()
+        } else if next.receiving && (prev == .lost || prev == .searching) {
+            GPSHaptics.back()
         }
     }
 

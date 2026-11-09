@@ -13,6 +13,11 @@ final class Uploader: ObservableObject {
     @Published private(set) var isUploading = false
     @Published private(set) var lastMessage: String?
     @Published private(set) var online = false
+    /// いまモバイル通信(SIM)でつながっている
+    @Published private(set) var cellular = false
+
+    /// 自動で送ってよい通信か(「Wi-Fi のときだけ送る」がオンならモバイル通信では送らない)
+    var canAutoSend: Bool { online && !(AppSettings.shared.uploadWifiOnly && cellular) }
 
     private let monitor = NWPathMonitor()
     private let session: URLSession = {
@@ -28,11 +33,15 @@ final class Uploader: ObservableObject {
     func start() {
         monitor.pathUpdateHandler = { [weak self] path in
             let ok = path.status == .satisfied
+            // Wi-Fi が使えるときはそちらが優先される。テザリング(相手の iPhone の Wi-Fi)は Wi-Fi 扱い
+            let cell = ok && path.usesInterfaceType(.cellular) && !path.usesInterfaceType(.wifi)
             DispatchQueue.main.async {
                 guard let self else { return }
-                let cameOnline = ok && !self.online
+                let could = self.canAutoSend
                 self.online = ok
-                if cameOnline && AppSettings.shared.autoUpload { self.uploadPending() }
+                self.cellular = cell
+                // 送れるようになったとき(オフライン→オンライン、モバイル通信→Wi-Fi)に送る
+                if !could && self.canAutoSend && AppSettings.shared.autoUpload { self.uploadPending() }
             }
         }
         monitor.start(queue: DispatchQueue(label: "uploader.monitor"))
@@ -49,13 +58,27 @@ final class Uploader: ObservableObject {
         bgTask = .invalid
     }
 
-    func uploadPending() {
+    /// 「Wi-Fi のときだけ送る」を切り替えたとき
+    func networkPolicyChanged() {
+        DispatchQueue.main.async {
+            if self.canAutoSend && AppSettings.shared.autoUpload { self.uploadPending() }
+        }
+    }
+
+    /// manual: ログ画面のボタンから送るとき(モバイル通信でも送る)
+    func uploadPending(manual: Bool = false) {
         guard !isUploading, !Recorder.shared.isRecording else { return }
         retryItem?.cancel()
         retryItem = nil
         LogStore.shared.reload()
         let targets = LogStore.shared.unsent
         guard !targets.isEmpty, let base = AppSettings.shared.baseURL else {
+            Recorder.shared.endUploadKeepAlive()
+            return
+        }
+        if !manual && AppSettings.shared.uploadWifiOnly && cellular {
+            // Wi-Fi やテザリングにつながったら送る(つながったときは通信の監視から呼ばれる)
+            lastMessage = "モバイル通信なので送っていません(Wi-Fi につながったら送ります)"
             Recorder.shared.endUploadKeepAlive()
             return
         }

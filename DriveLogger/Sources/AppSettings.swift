@@ -43,8 +43,36 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(travelMode.rawValue, forKey: "travelMode") }
     }
 
+    /// 記録中、GPS が切れたとき・戻ったときにバイブで知らせる
+    @Published var gpsVibrate: Bool {
+        didSet { UserDefaults.standard.set(gpsVibrate, forKey: "gpsVibrate") }
+    }
+
+    /// モバイル通信(SIM)のときは自動で送らない(Wi-Fi・テザリングのときだけ送る)
+    @Published var uploadWifiOnly: Bool {
+        didSet {
+            UserDefaults.standard.set(uploadWifiOnly, forKey: "uploadWifiOnly")
+            Uploader.shared.networkPolicyChanged()
+        }
+    }
+
+    /// 音を一切鳴らさず、画面の表示だけで知らせる(同期・目印・停止・急な操作)
+    @Published var soundOff: Bool {
+        didSet { UserDefaults.standard.set(soundOff, forKey: "soundOff") }
+    }
+
+    /// 地図をダブルタップして上下に動かす拡大縮小で、下に動かすと拡大する(Google マップと同じ向き)。
+    /// false なら Apple の地図の標準のまま
+    @Published var oneFingerZoomDownIn: Bool {
+        didSet { UserDefaults.standard.set(oneFingerZoomDownIn, forKey: "oneFingerZoomDownIn") }
+    }
+
     private init() {
         let d = UserDefaults.standard
+        oneFingerZoomDownIn = d.object(forKey: "oneFingerZoomDownIn") as? Bool ?? true
+        soundOff = d.bool(forKey: "soundOff")
+        uploadWifiOnly = d.object(forKey: "uploadWifiOnly") as? Bool ?? true
+        gpsVibrate = d.object(forKey: "gpsVibrate") as? Bool ?? true
         travelMode = d.string(forKey: "travelMode").flatMap(TravelMode.init(rawValue:)) ?? .car
         mapStyle = d.string(forKey: "mapStyle").flatMap(MapStyle.init(rawValue:)) ?? .appleStandard
         mapHeadingUp = d.bool(forKey: "mapHeadingUp")
