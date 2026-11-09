@@ -5,6 +5,7 @@ enum LogRoute: Hashable {
     case allDays
     case day(String) // yyyy-MM-dd(開始時刻のローカル日付)
     case detail(String) // 走行ID
+    case review(String) // 走行ID(地図とグラフで振り返る)
 }
 
 struct LogsView: View {
@@ -44,6 +45,7 @@ struct LogsView: View {
                 case .allDays: AllDaysView()
                 case .day(let key): DayLogsView(dayKey: key)
                 case .detail(let id): LogDetailView(id: id)
+                case .review(let id): ReviewRoute(id: id)
                 }
             }
             .refreshable { store.reload() }
@@ -177,6 +179,13 @@ struct LogDetailView: View {
         let files = ["track.gpx", "location.csv", "motion.csv", "pressure.csv", "evaluation.json", "meta.json"]
         List {
             if let meta {
+                if meta.finished && meta.points >= 2 {
+                    Section {
+                        NavigationLink(value: LogRoute.review(meta.id)) {
+                            Label("地図とグラフで振り返る", systemImage: "chart.xyaxis.line")
+                        }
+                    }
+                }
                 Section("概要") {
                     LabeledContent("移動手段") {
                         Label(meta.travelMode.title, systemImage: meta.travelMode.systemImage)
@@ -225,6 +234,20 @@ struct LogDetailView: View {
     private func size(_ url: URL) -> String {
         let bytes = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
         return ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+    }
+}
+
+/// 振り返り画面(走行IDから開く)
+struct ReviewRoute: View {
+    let id: String
+    @EnvironmentObject var store: LogStore
+
+    var body: some View {
+        if let meta = store.sessions.first(where: { $0.id == id }) {
+            ReviewView(meta: meta).toolbar(.hidden, for: .tabBar)
+        } else {
+            Text("ログが見つかりません").foregroundStyle(.secondary)
+        }
     }
 }
 
