@@ -176,7 +176,7 @@ struct LogDetailView: View {
     var body: some View {
         let meta = store.sessions.first { $0.id == id }
         let dir = store.dir(id)
-        let files = ["track.gpx", "location.csv", "motion.csv", "pressure.csv", "evaluation.json", "meta.json"]
+        let files = ["track.gpx", "location.csv", "motion.csv", "pressure.csv", "evaluation.json", DriveWeather.fileName, "meta.json"]
         List {
             if let meta {
                 if meta.finished && meta.points >= 2 {
@@ -199,6 +199,9 @@ struct LogDetailView: View {
                     }
                     LabeledContent("位置の点数", value: "\(meta.points)")
                     LabeledContent("端末", value: "\(meta.device) / iOS \(meta.systemVersion)")
+                }
+                if meta.finished && meta.travelMode != .plane {
+                    WeatherSection(meta: meta)
                 }
                 if meta.travelMode.isCar {
                     EvalSection(id: meta.id, finished: meta.finished)
@@ -234,6 +237,67 @@ struct LogDetailView: View {
     private func size(_ url: URL) -> String {
         let bytes = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
         return ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+    }
+}
+
+/// 走ったときの天気。地図サーバーが走り終えたあとに取ったものを、ログを開いたときに受け取る
+struct WeatherSection: View {
+    let meta: SessionMeta
+    @EnvironmentObject var store: LogStore
+    @State private var weather: DriveWeather?
+    @State private var loading = true
+    @State private var showAll = false
+
+    var body: some View {
+        Section {
+            if let w = weather {
+                let s = w.summary
+                Text(WeatherText.headline(s)).font(.headline)
+                if let p = s.precipMax, p > 0 {
+                    LabeledContent("雨(1時間の最大)", value: String(format: "%.1f mm", p))
+                }
+                if let wind = s.windMax {
+                    LabeledContent("風(最大)", value: String(format: "%.0f m/s", wind) + (s.gustMax.map { String(format: "(瞬間 %.0f)", $0) } ?? ""))
+                }
+                if let rise = s.sunrise, let set = s.sunset {
+                    LabeledContent("日の出・日の入り", value: "\(Display.time.string(from: Date(timeIntervalSince1970: rise)))・\(Display.time.string(from: Date(timeIntervalSince1970: set)))")
+                }
+                DisclosureGroup("\(w.samples.count) 地点の天気", isExpanded: $showAll) {
+                    ForEach(Array(w.samples.enumerated()), id: \.offset) { _, x in
+                        LabeledContent {
+                            Text("\(WeatherText.temp(x.temp))・\(WeatherText.wind(x))" + ((x.precip ?? 0) > 0 ? String(format: "・雨 %.1f mm", x.precip!) : ""))
+                        } label: {
+                            VStack(alignment: .leading) {
+                                Text("\(x.icon) \(x.label)")
+                                Text(Display.time.string(from: Date(timeIntervalSince1970: x.t)))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            } else if loading {
+                HStack { ProgressView(); Text("天気を確かめています…").foregroundStyle(.secondary) }
+            } else {
+                Text(meta.rawSent.contains("meta.json")
+                     ? "地図サーバーがまだ天気を取っていません(取れたら、次に開いたときに出ます)"
+                     : "地図サーバーに送ると、走ったときの天気を取ってきます")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("天気")
+        } footer: {
+            if weather != nil {
+                Text("Open-Meteo の気象モデルの値です(観測所の実測ではありません)")
+            }
+        }
+        .task(id: meta.rawSent.count) {
+            let folder = store.dir(meta.id)
+            weather = DriveWeather.load(folder: folder)
+            if weather == nil, await Uploader.shared.fetchWeather(meta) {
+                weather = DriveWeather.load(folder: folder)
+            }
+            loading = false
+        }
     }
 }
 
