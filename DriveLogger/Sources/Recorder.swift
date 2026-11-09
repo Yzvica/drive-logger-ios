@@ -18,6 +18,12 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published private(set) var mode: TravelMode = .car
     /// 直前に止めた車以外の移動(記録画面にまとめを出す)
     @Published var lastTrip: SessionMeta?
+    /// GPS の受信状態(記録中のランプ)
+    @Published private(set) var gpsStatus: GPSStatus = .searching
+    /// 最後に使える位置(±50m 以内)が来た時刻(端末の起動からの秒)
+    private var lastUsableFix: TimeInterval?
+    private var lastFixAccuracy: Double = -1
+    private var gpsTimer: Timer?
     @Published private(set) var track: [CLLocationCoordinate2D] = []
     @Published private(set) var authorization: CLAuthorizationStatus = .notDetermined
     @Published var flash = false
@@ -125,6 +131,7 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         track = []
         isRecording = true
         updateIdleTimer()
+        startGPSWatch()
 
         location.allowsBackgroundLocationUpdates = true
         location.showsBackgroundLocationIndicator = true
@@ -175,6 +182,7 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
         motion.stopDeviceMotionUpdates()
         altimeter.stopRelativeAltitudeUpdates()
+        stopGPSWatch()
         isRecording = false
         updateIdleTimer()
         motionQueue.waitUntilAllOperationsAreFinished()
@@ -332,11 +340,58 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
 
         DispatchQueue.main.async {
+            self.lastFixAccuracy = acc
+            if acc <= GPSStatus.usableAccuracy { self.lastUsableFix = ProcessInfo.processInfo.systemUptime }
+            self.updateGPSStatus()
             self.speedMS = speed ?? 0
             self.horizontalAccuracy = loc.horizontalAccuracy
             self.altitudeM = altitude
             if good { self.track.append(loc.coordinate) }
             self.io.async { let m = self.meta; DispatchQueue.main.async { if self.isRecording { self.current = m } } }
+        }
+    }
+
+    // MARK: - GPS の受信状態
+
+    private func startGPSWatch() {
+        lastUsableFix = nil
+        lastFixAccuracy = -1
+        gpsStatus = .searching
+        gpsTimer?.invalidate()
+        // 位置が来なくなったことは位置の通知では分からないので、1秒ごとに確かめる
+        // (記録中は位置情報のバックグラウンド更新でアプリが起きているので、画面を消しても動く)
+        let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.updateGPSStatus() }
+        RunLoop.main.add(t, forMode: .common)
+        gpsTimer = t
+    }
+
+    private func stopGPSWatch() {
+        gpsTimer?.invalidate()
+        gpsTimer = nil
+        gpsStatus = .searching
+    }
+
+    /// メインスレッドで呼ぶ
+    private func updateGPSStatus() {
+        guard isRecording else { return }
+        let next: GPSStatus
+        if let last = lastUsableFix {
+            if ProcessInfo.processInfo.systemUptime - last > GPSStatus.lostAfter {
+                next = .lost
+            } else {
+                next = lastFixAccuracy >= 0 && lastFixAccuracy <= GPSStatus.goodAccuracy ? .good : .weak
+            }
+        } else {
+            next = .searching
+        }
+        guard next != gpsStatus else { return }
+        let prev = gpsStatus
+        gpsStatus = next
+        guard AppSettings.shared.gpsVibrate else { return }
+        if next == .lost && prev.receiving {
+            GPSHaptics.lost()
+        } else if next.receiving && (prev == .lost || prev == .searching) {
+            GPSHaptics.back()
         }
     }
 

@@ -43,8 +43,14 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(travelMode.rawValue, forKey: "travelMode") }
     }
 
+    /// 記録中、GPS が切れたとき・戻ったときにバイブで知らせる
+    @Published var gpsVibrate: Bool {
+        didSet { UserDefaults.standard.set(gpsVibrate, forKey: "gpsVibrate") }
+    }
+
     private init() {
         let d = UserDefaults.standard
+        gpsVibrate = d.object(forKey: "gpsVibrate") as? Bool ?? true
         travelMode = d.string(forKey: "travelMode").flatMap(TravelMode.init(rawValue:)) ?? .car
         mapStyle = d.string(forKey: "mapStyle").flatMap(MapStyle.init(rawValue:)) ?? .appleStandard
         mapHeadingUp = d.bool(forKey: "mapHeadingUp")

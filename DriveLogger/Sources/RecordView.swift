@@ -23,6 +23,9 @@ struct RecordView: View {
                     }
                     .padding(8)
                 }
+                .overlay(alignment: .topTrailing) {
+                    if recorder.isRecording { GPSLamp(status: recorder.gpsStatus).padding(8) }
+                }
                 .clipShape(RoundedRectangle(cornerRadius: 12))
 
             HStack(alignment: .firstTextBaseline, spacing: 4) {

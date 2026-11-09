@@ -28,6 +28,13 @@ struct SettingsView: View {
                 } footer: {
                     Text("急ブレーキは下がる音、急加速は上がる音、急ハンドルは短く2回、そのほかの急な操作は短く1回、止まり際のカックンは低い音。音は DJI Mic にも入ります。")
                 }
+                Section {
+                    Toggle("GPS が切れた・戻ったらバイブ", isOn: $settings.gpsVibrate)
+                } header: {
+                    Text("GPS の受信状態")
+                } footer: {
+                    Text("記録中は地図の右上に GPS のランプ(緑=良好 ±20m 以内・黄=弱い ±50m 以内・赤=切断・灰=測位中)を出します。使える位置が\(Int(GPSStatus.lostAfter))秒来ないと切断とみなし2回振動、戻ったら(最初に測位できたときも)1回振動します。車・電車・飛行機のどれでも動きます。")
+                }
                 Section("記録") {
                     Picker("加速度などの頻度", selection: $settings.motionHz) {
                         Text("25 Hz").tag(25)
