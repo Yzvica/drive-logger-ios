@@ -162,6 +162,23 @@ final class Uploader: ObservableObject {
         }
     }
 
+    /// 地図サーバーが、トンネルなどで GPS が途切れた区間を道路に沿って補った位置(location_filled.csv)を受け取り、
+    /// 走行フォルダに保存する。まだ補っていない・つながらないときは false(次に振り返りを開いたときにまた試す)
+    func fetchFilled(_ meta: SessionMeta) async -> Bool {
+        guard online, let base = AppSettings.shared.baseURL, meta.rawSent.contains("meta.json") else { return false }
+        var c = URLComponents(url: base.appendingPathComponent("api/rawlog"), resolvingAgainstBaseURL: false)!
+        c.queryItems = [URLQueryItem(name: "session", value: meta.id), URLQueryItem(name: "file", value: ReviewLoader.filledFile)]
+        if !meta.travelMode.isCar { c.queryItems?.append(URLQueryItem(name: "kind", value: "trip")) }
+        var req = URLRequest(url: c.url!)
+        // 自宅の外(サーバーに届かない所)で待たされないよう短めにする
+        req.timeoutInterval = 5
+        guard let result = try? await session.data(for: req),
+              (result.1 as? HTTPURLResponse)?.statusCode == 200, !result.0.isEmpty else { return false }
+        let data = result.0
+        let file = LogStore.shared.dir(meta.id).appendingPathComponent(ReviewLoader.filledFile)
+        return (try? data.write(to: file, options: .atomic)) != nil
+    }
+
     private func send(file: URL, to url: URL, method: String) async throws {
         var req = URLRequest(url: url)
         req.httpMethod = method

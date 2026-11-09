@@ -60,11 +60,11 @@ enum ReviewLoader {
     /// 走行フォルダを読む。motion = false(車以外)なら加速度は読まない。
     /// pressure = false なら高度に気圧を使わない(飛行機は機内が与圧されていて、気圧が外の高度と合わないため)
     static func load(folder: URL, motion: Bool, pressure: Bool = true) throws -> ReviewData {
-        let locURL = folder.appendingPathComponent("location.csv")
-        let rows = try DriveEval.readCSV(locURL, columns: ["unix_s", "lat", "lon", "alt_m", "h_acc_m", "v_acc_m", "speed_ms", "speed_est_ms"])
+        let rows = try DriveEval.readCSV(locationFile(folder), columns: ["unix_s", "lat", "lon", "alt_m", "h_acc_m", "v_acc_m", "speed_ms", "speed_est_ms"])
         var gps: [(t: Double, la: Double, lo: Double, alt: Double?, sp: Double?)] = []
         for r in rows {
-            guard let t = r[0], let la = r[1], let lo = r[2], let acc = r[4], acc <= 50 else { continue }
+            // 補った点(精度が空で推定の速度がある)も使う
+            guard let t = r[0], let la = r[1], let lo = r[2], let acc = r[4] ?? (r[7] != nil ? 0 : nil), acc <= 50 else { continue }
             let alt = (r[5].map { $0 >= 0 && $0 <= 30 } ?? false) ? r[3] : nil
             // GPS の速度がない点(トンネルなど)は、記録中に位置の動きから推定した速度を使う
             gps.append((t, la, lo, alt, (r[6] ?? r[7]).map { max(0, $0) }))
@@ -118,12 +118,34 @@ enum ReviewLoader {
                           altitudeFromPressure: alt?.fromPressure ?? false)
     }
 
+    /// 位置のファイル。地図サーバーがトンネルなどで途切れた区間を道路に沿って補った location_filled.csv を
+    /// 受け取っていればそれを、なければ location.csv を使う
+    static func locationFile(_ folder: URL) -> URL {
+        let filled = folder.appendingPathComponent(filledFile)
+        return FileManager.default.fileExists(atPath: filled.path) ? filled : folder.appendingPathComponent("location.csv")
+    }
+
+    static let filledFile = "location_filled.csv"
+
+    /// 振り返り用の位置。補った点(精度が空で推定の速度がある)も使い、GPS の速度がない点は推定の速度にする
+    static func reviewLocations(_ folder: URL) throws -> [DriveEval.Loc] {
+        let rows = try DriveEval.readCSV(locationFile(folder), columns: ["unix_s", "lat", "lon", "h_acc_m", "speed_ms", "course_deg", "speed_est_ms"])
+        var out: [DriveEval.Loc] = []
+        for r in rows {
+            guard let t = r[0], let la = r[1], let lo = r[2], let acc = r[3] ?? (r[6] != nil ? 0 : nil), acc <= 50 else { continue }
+            out.append(DriveEval.Loc(t: t, la: la, lo: lo, sp: r[4] ?? r[6], cs: r[5]))
+        }
+        return out.sorted { $0.t < $1.t }
+    }
+
     /// 10 Hz の行(DriveEval と同じ車の向き・停止の判定・ならし方)
     static func motionRows(folder: URL) throws -> [(t: Double, la: Double, lo: Double, kmh: Double, lonG: Double?, latG: Double?, jerk: Double?)] {
-        let locs = try DriveEval.loadLocations(folder.appendingPathComponent("location.csv"))
+        // 車の向きは評価と同じく GPS の点だけで決め、位置と速度は補った点も使う
+        let gpsLocs = try DriveEval.loadLocations(folder.appendingPathComponent("location.csv"))
+        let locs = try reviewLocations(folder)
         let mot = try DriveEval.loadMotion(folder.appendingPathComponent("motion.csv"))
         guard let l0 = locs.first, let l1 = locs.last, let m0 = mot.first, let m1 = mot.last else { throw DriveEvalError.noData }
-        let axes = try DriveEval.vehicleAxes(locs: locs, mot: mot)
+        let axes = try DriveEval.vehicleAxes(locs: gpsLocs, mot: mot)
         let s0 = max(l0.t, m0.t), s1 = min(l1.t, m1.t)
         guard s1 > s0 else { throw DriveEvalError.noData }
         let rows = DriveEval.resample(locs: locs, mot: mot, axes: axes, t0: s0, t1: s1)
