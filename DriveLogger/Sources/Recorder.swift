@@ -25,6 +25,8 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 速度の推定に使う、ひとつ前の位置
     private var prevForSpeed: CLLocation?
     private var estimatedSpeed: Double = 0
+    /// いま速度を推定している途中か(推定値を location.csv の speed_est_ms 列にも書く)
+    private var estimating = false
 
     /// 画面で知らせる(メインスレッドで呼ぶ)
     func showNotice(_ text: String) {
@@ -106,6 +108,7 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         altitudeM = nil
         prevForSpeed = nil
         estimatedSpeed = 0
+        estimating = false
         speedEstimated = false
         location.activityType = mode.activityType
         if keepingAliveForUpload {
@@ -138,7 +141,7 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         do {
             gpx = try GPXWriter(url: dir.appendingPathComponent("track.gpx"), name: id)
             locationCSV = try AppendFile(url: dir.appendingPathComponent("location.csv"), header:
-                "unix_s,lat,lon,alt_m,h_acc_m,v_acc_m,speed_ms,speed_acc_ms,course_deg,course_acc_deg,floor\n",
+                "unix_s,lat,lon,alt_m,h_acc_m,v_acc_m,speed_ms,speed_acc_ms,course_deg,course_acc_deg,floor,speed_est_ms\n",
                 flushBytes: 8 * 1024)
             motionCSV = try AppendFile(url: dir.appendingPathComponent("motion.csv"), header:
                 "unix_s,ax_g,ay_g,az_g,grav_x,grav_y,grav_z,rot_x_rads,rot_y_rads,rot_z_rads,q_w,q_x,q_y,q_z,heading_deg\n")
@@ -326,6 +329,8 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         let speed = loc.speed >= 0 ? loc.speed : nil
         let coord = loc.coordinate, acc = loc.horizontalAccuracy
         let altitude = loc.verticalAccuracy >= 0 ? loc.altitude : nil
+        // GPS の速度が来ないとき(トンネルなど)は位置の動きから推定する。speed_ms は空のまま、推定値は speed_est_ms 列に書く
+        let estimated = estimateSpeed(loc, speed: speed)
         motionQueue.addOperation {
             self.coach?.addLocation(t: t, lat: coord.latitude, lon: coord.longitude, speed: speed, accuracy: acc)
         }
@@ -336,6 +341,7 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
             speed.map { Fmt.n($0, 2) } ?? "", loc.speedAccuracy >= 0 ? Fmt.n(loc.speedAccuracy, 2) : "",
             loc.course >= 0 ? Fmt.n(loc.course, 1) : "", loc.courseAccuracy >= 0 ? Fmt.n(loc.courseAccuracy, 1) : "",
             loc.floor.map { String($0.level) } ?? "",
+            estimated.map { Fmt.n($0, 2) } ?? "",
         ].joined(separator: ",") + "\n"
 
         // 地図に送る GPX と距離には、精度の良い点だけを使う
@@ -371,7 +377,7 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
             self.lastFixAccuracy = acc
             if acc <= GPSStatus.usableAccuracy { self.lastUsableFix = ProcessInfo.processInfo.systemUptime }
             self.updateGPSStatus()
-            self.updateDisplayedSpeed(loc, speed: speed)
+            self.updateDisplayedSpeed(speed: speed, estimated: estimated)
             self.horizontalAccuracy = loc.horizontalAccuracy
             self.altitudeM = altitude
             if good { self.track.append(loc.coordinate) }
@@ -379,29 +385,51 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
-    // MARK: - 画面の速度
+    // MARK: - 速度の推定
 
     /// GPS の速度が来ないとき(トンネルの中で iOS が位置だけを推測で動かしているときなど)は、
-    /// ひとつ前の位置からの距離÷時間で速度を推定して出す。ファイルには推定値を書かない(画面だけ)
-    private func updateDisplayedSpeed(_ loc: CLLocation, speed: Double?) {
+    /// ひとつ前の位置からの距離÷時間で速度を推定する。GPS の速度があるとき・推定できないときは nil。
+    /// 推定値は画面に出し、location.csv の speed_est_ms 列にも書く(speed_ms 列は空のまま)
+    private func estimateSpeed(_ loc: CLLocation, speed: Double?) -> Double? {
         defer { prevForSpeed = loc }
         if let s = speed {
-            speedMS = s
             estimatedSpeed = s
-            speedEstimated = false
-            return
+            estimating = false
+            return nil
         }
-        guard let prev = prevForSpeed else { speedMS = 0; return }
+        // 基地局の測位(±数百m〜)に切り替わった後は、位置の差が速度にならないので推定しない
+        guard let prev = prevForSpeed,
+              loc.horizontalAccuracy <= GPSStatus.usableAccuracy,
+              prev.horizontalAccuracy <= GPSStatus.usableAccuracy else {
+            estimating = false
+            return nil
+        }
         let dt = loc.timestamp.timeIntervalSince(prev.timestamp)
-        guard dt >= 0.5, dt <= 10 else {
-            if dt > 10 { speedMS = 0; speedEstimated = false }
-            return
+        if dt > 10 || dt < 0 {
+            estimating = false
+            return nil
         }
+        // 間隔が短すぎる点は距離の誤差が大きいので、直前の推定値を使う
+        if dt < 0.5 { return estimating ? estimatedSpeed : nil }
         let raw = loc.distance(from: prev) / dt
         // 位置のぶれで跳ねないよう、少しならす
         estimatedSpeed = estimatedSpeed * 0.6 + raw * 0.4
-        speedMS = estimatedSpeed
-        speedEstimated = true
+        estimating = true
+        return estimatedSpeed
+    }
+
+    /// 画面の速度。GPS の速度 → 推定値 → 0 の順
+    private func updateDisplayedSpeed(speed: Double?, estimated: Double?) {
+        if let s = speed {
+            speedMS = s
+            speedEstimated = false
+        } else if let e = estimated {
+            speedMS = e
+            speedEstimated = true
+        } else {
+            speedMS = 0
+            speedEstimated = false
+        }
     }
 
     // MARK: - GPS の受信状態

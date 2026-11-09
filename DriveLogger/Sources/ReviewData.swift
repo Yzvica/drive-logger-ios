@@ -61,12 +61,13 @@ enum ReviewLoader {
     /// pressure = false なら高度に気圧を使わない(飛行機は機内が与圧されていて、気圧が外の高度と合わないため)
     static func load(folder: URL, motion: Bool, pressure: Bool = true) throws -> ReviewData {
         let locURL = folder.appendingPathComponent("location.csv")
-        let rows = try DriveEval.readCSV(locURL, columns: ["unix_s", "lat", "lon", "alt_m", "h_acc_m", "v_acc_m", "speed_ms"])
+        let rows = try DriveEval.readCSV(locURL, columns: ["unix_s", "lat", "lon", "alt_m", "h_acc_m", "v_acc_m", "speed_ms", "speed_est_ms"])
         var gps: [(t: Double, la: Double, lo: Double, alt: Double?, sp: Double?)] = []
         for r in rows {
             guard let t = r[0], let la = r[1], let lo = r[2], let acc = r[4], acc <= 50 else { continue }
             let alt = (r[5].map { $0 >= 0 && $0 <= 30 } ?? false) ? r[3] : nil
-            gps.append((t, la, lo, alt, r[6].map { max(0, $0) }))
+            // GPS の速度がない点(トンネルなど)は、記録中に位置の動きから推定した速度を使う
+            gps.append((t, la, lo, alt, (r[6] ?? r[7]).map { max(0, $0) }))
         }
         gps.sort { $0.t < $1.t }
         guard let g0 = gps.first, let g1 = gps.last, g1.t > g0.t else { throw DriveEvalError.noData }
