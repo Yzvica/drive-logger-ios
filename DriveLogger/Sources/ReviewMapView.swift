@@ -11,6 +11,8 @@ struct ReviewMapView: UIViewRepresentable {
     let cursor: Int?
     /// この点の時刻を地図の中心に寄せる(出来事を選んだときなど)。値が変わったときだけ動かす
     let focus: Int?
+    /// ダブルタップして上下に動かす拡大縮小を、下で拡大にする(設定の値)
+    var zoomDownIn: Bool = false
     let onPick: (Int) -> Void
 
     /// 速度の色分け(km/h の上限と色)
@@ -48,6 +50,8 @@ struct ReviewMapView: UIViewRepresentable {
         tap.delegate = c
         map.addGestureRecognizer(tap)
 
+        c.zoom.install(on: map, downIn: zoomDownIn)
+
         applyStyle(map, c)
         drawTrack(map, c)
         return map
@@ -57,6 +61,7 @@ struct ReviewMapView: UIViewRepresentable {
         let c = context.coordinator
         c.parent = self
         if c.style != style { applyStyle(map, c) }
+        c.zoom.update(map, downIn: zoomDownIn)
         if c.drawnCount != samples.count { drawTrack(map, c) }
 
         if let i = cursor, samples.indices.contains(i) {
@@ -167,8 +172,13 @@ struct ReviewMapView: UIViewRepresentable {
         var dot: CursorAnnotation?
         var drawnCount = -1
         var focused: Int?
+        let zoom = OneFingerZoom()
 
         init(parent: ReviewMapView) { self.parent = parent }
+
+        func mapViewDidFinishLoadingMap(_ mapView: MKMapView) {
+            if zoom.applied == nil { zoom.apply(mapView, downIn: parent.zoomDownIn) }
+        }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             if let tiles = overlay as? MKTileOverlay { return MKTileOverlayRenderer(tileOverlay: tiles) }
