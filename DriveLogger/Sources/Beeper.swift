@@ -19,7 +19,29 @@ final class Beeper {
     private var players: [Kind: AVAudioPlayer] = [:]
     private var configured = false
 
-    private init() {}
+    private init() {
+        let nc = NotificationCenter.default
+        // 電話やほかのアプリの音で中断されたあと、もう一度鳴らせるようにする
+        nc.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
+            guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  AVAudioSession.InterruptionType(rawValue: raw) == .ended else { return }
+            self?.reactivate()
+        }
+        // 音の仕組みがリセットされたら、作り直す
+        nc.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.configured = false
+            self?.players.removeAll()
+        }
+    }
+
+    private func reactivate() {
+        do {
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            NSLog("オーディオセッションを再開できません: \(error)")
+            configured = false
+        }
+    }
 
     /// 鳴らした時刻(音の出だし)を返す。オーディオの準備に失敗したときは nil
     @discardableResult
@@ -29,7 +51,11 @@ final class Beeper {
         p.currentTime = 0
         // 出力の遅れを足して、実際に音が出る時刻に近づける
         let latency = AVAudioSession.sharedInstance().outputLatency
-        guard p.play() else { return nil }
+        if !p.play() {
+            // 中断の終わりの知らせが来ないこともあるので、鳴らせなければ一度だけ再開してからやり直す
+            reactivate()
+            guard p.play() else { return nil }
+        }
         return Date().addingTimeInterval(latency)
     }
 

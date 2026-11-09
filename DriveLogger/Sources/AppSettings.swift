@@ -48,8 +48,17 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(gpsVibrate, forKey: "gpsVibrate") }
     }
 
+    /// モバイル通信(SIM)のときは自動で送らない(Wi-Fi・テザリングのときだけ送る)
+    @Published var uploadWifiOnly: Bool {
+        didSet {
+            UserDefaults.standard.set(uploadWifiOnly, forKey: "uploadWifiOnly")
+            Uploader.shared.networkPolicyChanged()
+        }
+    }
+
     private init() {
         let d = UserDefaults.standard
+        uploadWifiOnly = d.object(forKey: "uploadWifiOnly") as? Bool ?? true
         gpsVibrate = d.object(forKey: "gpsVibrate") as? Bool ?? true
         travelMode = d.string(forKey: "travelMode").flatMap(TravelMode.init(rawValue:)) ?? .car
         mapStyle = d.string(forKey: "mapStyle").flatMap(MapStyle.init(rawValue:)) ?? .appleStandard

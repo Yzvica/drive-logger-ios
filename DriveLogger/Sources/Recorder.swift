@@ -360,15 +360,22 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         gpsTimer?.invalidate()
         // 位置が来なくなったことは位置の通知では分からないので、1秒ごとに確かめる
         // (記録中は位置情報のバックグラウンド更新でアプリが起きているので、画面を消しても動く)
-        let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.updateGPSStatus() }
+        let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            guard let self, self.isRecording else { return }
+            self.updateGPSStatus()
+            Watchdog.arm(mode: self.mode)
+        }
         RunLoop.main.add(t, forMode: .common)
         gpsTimer = t
+        Watchdog.requestPermission()
+        Watchdog.arm(mode: mode, force: true)
     }
 
     private func stopGPSWatch() {
         gpsTimer?.invalidate()
         gpsTimer = nil
         gpsStatus = .searching
+        Watchdog.disarm()
     }
 
     /// メインスレッドで呼ぶ

@@ -19,7 +19,7 @@ struct LogsView: View {
             List {
                 Section {
                     Button {
-                        uploader.uploadPending()
+                        uploader.uploadPending(manual: true)
                     } label: {
                         Label(uploader.isUploading ? "送信中…" : "未送信のログを送る(\(store.unsent.count)件)",
                               systemImage: "arrow.up.circle")
