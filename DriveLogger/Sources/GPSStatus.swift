@@ -54,6 +54,29 @@ struct GPSLamp: View {
     }
 }
 
+/// 記録中に GPS のバイブを切り替えるボタン(ランプの左に出す)
+struct GPSVibrateButton: View {
+    @Binding var isOn: Bool
+
+    var body: some View {
+        Button {
+            isOn.toggle()
+            // オンにしたときは1回振動して、効いていることが手で分かるようにする
+            if isOn { GPSHaptics.back() }
+        } label: {
+            Image(systemName: isOn ? "iphone.radiowaves.left.and.right" : "iphone.slash")
+                .font(.footnote.bold())
+                .foregroundStyle(isOn ? Color.primary : Color.secondary)
+                .frame(minWidth: 20)
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(.regularMaterial, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isOn ? "GPS のバイブ オン" : "GPS のバイブ オフ")
+        .accessibilityHint("タップで切り替え")
+    }
+}
+
 /// GPS が切れた・戻ったことをバイブで知らせる(消音モードでも振動する。画面を消していても記録中は動く)
 enum GPSHaptics {
     /// 切れた: 2回

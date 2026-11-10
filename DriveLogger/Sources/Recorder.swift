@@ -39,6 +39,9 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// GPS の受信状態(記録中のランプ)
     @Published private(set) var gpsStatus: GPSStatus = .searching
+    /// この記録で GPS の切断・再接続をバイブで知らせるか。記録開始のときに設定の値(既定はオン)から始め、
+    /// 記録中は記録画面のボタンで切り替えられる(切り替えはこの記録だけ。次の記録はまた設定の値から)
+    @Published var gpsVibrateNow = true
     /// 最後に使える位置(±50m 以内)が来た時刻(端末の起動からの秒)
     private var lastUsableFix: TimeInterval?
     private var lastFixAccuracy: Double = -1
@@ -438,6 +441,7 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         lastUsableFix = nil
         lastFixAccuracy = -1
         gpsStatus = .searching
+        gpsVibrateNow = AppSettings.shared.gpsVibrate
         gpsTimer?.invalidate()
         // 位置が来なくなったことは位置の通知では分からないので、1秒ごとに確かめる
         // (記録中は位置情報のバックグラウンド更新でアプリが起きているので、画面を消しても動く)
@@ -475,7 +479,7 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         guard next != gpsStatus else { return }
         let prev = gpsStatus
         gpsStatus = next
-        guard AppSettings.shared.gpsVibrate else { return }
+        guard gpsVibrateNow else { return }
         if next == .lost && prev.receiving {
             GPSHaptics.lost()
         } else if next.receiving && (prev == .lost || prev == .searching) {

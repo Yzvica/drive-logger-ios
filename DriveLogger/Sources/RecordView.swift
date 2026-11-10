@@ -27,7 +27,11 @@ struct RecordView: View {
                 .overlay(alignment: .bottomTrailing) {
                     // 右上は追尾ボタンと方位磁針、右下の端は地理院の出典なので、その少し上に出す
                     if recorder.isRecording {
-                        GPSLamp(status: recorder.gpsStatus).padding(.trailing, 8).padding(.bottom, 24)
+                        HStack(spacing: 6) {
+                            GPSVibrateButton(isOn: $recorder.gpsVibrateNow)
+                            GPSLamp(status: recorder.gpsStatus)
+                        }
+                        .padding(.trailing, 8).padding(.bottom, 24)
                     }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 12))

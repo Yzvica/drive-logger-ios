@@ -42,10 +42,14 @@ struct SettingsView: View {
                 }
                 Section {
                     Toggle("GPS が切れた・戻ったらバイブ", isOn: $settings.gpsVibrate)
+                        // 記録中にここを変えたら、今の記録にもそのまま効かせる
+                        .onChange(of: settings.gpsVibrate) { on in
+                            if recorder.isRecording { recorder.gpsVibrateNow = on }
+                        }
                 } header: {
                     Text("GPS の受信状態")
                 } footer: {
-                    Text("記録中は地図の右上に GPS のランプ(緑=良好 ±20m 以内・黄=弱い ±50m 以内・赤=切断・灰=測位中)を出します。使える位置が\(Int(GPSStatus.lostAfter))秒来ないと切断とみなし2回振動、戻ったら(最初に測位できたときも)1回振動します。車・電車・飛行機のどれでも動きます。")
+                    Text("記録中は地図の右上に GPS のランプ(緑=良好 ±20m 以内・黄=弱い ±50m 以内・赤=切断・灰=測位中)を出します。使える位置が\(Int(GPSStatus.lostAfter))秒来ないと切断とみなし2回振動、戻ったら(最初に測位できたときも)1回振動します。車・電車・飛行機のどれでも動きます。ここは記録を始めるときの値で、記録中はランプの左のボタンでその記録だけ切り替えられます。")
                 }
                 Section {
                     Text("記録中にアプリが裏で終了すると、\(Int(Watchdog.delay))秒ほどで通知が届きます。初めて記録するときに通知を許可してください")
