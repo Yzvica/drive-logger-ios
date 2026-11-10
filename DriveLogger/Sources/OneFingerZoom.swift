@@ -8,9 +8,8 @@ final class OneFingerZoom: NSObject, UIGestureRecognizerDelegate {
     private(set) var applied: Bool?
     private var startY: CGFloat = 0
     private var startDistance: CLLocationDistance = 0
-    private var zooming = false
-    /// 拡大縮小のあいだ止めた追尾(記録画面)。指を離したら元に戻す
-    private var pausedTracking: MKUserTrackingMode?
+    /// いま指で拡大縮小しているか(記録画面の追尾がこのあいだ地図を動かさないように)
+    private(set) var zooming = false
 
     /// 地図に自前のジェスチャーを付ける(最初は止めておき、apply で切り替える)
     func install(on map: MKMapView, downIn: Bool) {
@@ -61,15 +60,7 @@ final class OneFingerZoom: NSObject, UIGestureRecognizerDelegate {
             let dy = y - startY
             // 少し動かすまでは拡大縮小しない(ふつうのダブルタップで拡大できるように)
             if !zooming && abs(dy) < 8 { return }
-            if !zooming {
-                zooming = true
-                // 追尾中に setCamera で寄せても、次の位置の更新で MapKit が元のズームに戻してしまう。
-                // 動かしているあいだは追尾を止め、指を離したら戻す(ピンチと同じくズームが残る)
-                if map.userTrackingMode != .none {
-                    pausedTracking = map.userTrackingMode
-                    map.setUserTrackingMode(.none, animated: false)
-                }
-            }
+            zooming = true
             // 下に動かすと近づく(拡大)。200pt でおよそ 7.4 倍
             let d = startDistance * exp(-Double(dy) / 100)
             let cam = map.camera.copy() as! MKMapCamera
@@ -77,17 +68,6 @@ final class OneFingerZoom: NSObject, UIGestureRecognizerDelegate {
             map.setCamera(cam, animated: false)
         default:
             zooming = false
-            if let mode = pausedTracking {
-                pausedTracking = nil
-                let distance = map.camera.centerCoordinateDistance
-                map.setUserTrackingMode(mode, animated: false)
-                // 追尾に戻すときに MapKit がズームを変えたら、指で決めた距離に合わせ直す
-                if abs(map.camera.centerCoordinateDistance - distance) > distance * 0.02 {
-                    let cam = map.camera.copy() as! MKMapCamera
-                    cam.centerCoordinateDistance = distance
-                    map.setCamera(cam, animated: false)
-                }
-            }
         }
     }
 

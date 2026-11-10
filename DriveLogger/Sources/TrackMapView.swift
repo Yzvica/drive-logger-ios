@@ -29,7 +29,9 @@ enum MapStyle: String, CaseIterable, Identifiable {
 }
 
 /// 走行中の軌跡を表示する地図(iOS 16 でも使えるよう MKMapView を使う)。
-/// 右上のボタンで「追尾しない → 北が上で追尾 → 進行方向が上で追尾」を切り替える
+/// 右上のボタンで「追尾しない → 北が上で追尾 → 進行方向が上で追尾」を切り替える。
+/// MapKit の追尾(userTrackingMode)は、自前の片手ズームで変えた距離を次の更新で元に戻してしまうので使わず、
+/// 位置が更新されるたびに自分で地図の中心と向きを合わせる(距離はそのまま残す)
 struct TrackMapView: UIViewRepresentable {
     var track: [CLLocationCoordinate2D]
     var style: MapStyle
@@ -45,13 +47,16 @@ struct TrackMapView: UIViewRepresentable {
         map.pointOfInterestFilter = .excludingAll
         // 標準の方位磁針は右上の追尾ボタンに重なるので消し、ボタンの下に自分で置く
         map.showsCompass = false
-        map.setUserTrackingMode(headingUp ? .followWithHeading : .follow, animated: false)
+        context.coordinator.follow = headingUp ? .headingUp : .northUp
 
-        let button = MKUserTrackingButton(mapView: map)
+        let button = UIButton(type: .system)
         button.backgroundColor = UIColor.systemBackground.withAlphaComponent(0.85)
         button.layer.cornerRadius = 8
         button.translatesAutoresizingMaskIntoConstraints = false
+        button.addTarget(context.coordinator, action: #selector(Coordinator.tapFollow), for: .touchUpInside)
         map.addSubview(button)
+        context.coordinator.button = button
+        context.coordinator.updateButton()
 
         let compass = MKCompassButton(mapView: map)
         compass.compassVisibility = .adaptive // 北が上でないときだけ出す
@@ -71,6 +76,8 @@ struct TrackMapView: UIViewRepresentable {
         NSLayoutConstraint.activate([
             button.topAnchor.constraint(equalTo: map.topAnchor, constant: 8),
             button.trailingAnchor.constraint(equalTo: map.trailingAnchor, constant: -8),
+            button.widthAnchor.constraint(equalToConstant: 44),
+            button.heightAnchor.constraint(equalToConstant: 44),
             compass.topAnchor.constraint(equalTo: button.bottomAnchor, constant: 8),
             compass.centerXAnchor.constraint(equalTo: button.centerXAnchor),
             credit.trailingAnchor.constraint(equalTo: map.trailingAnchor, constant: -4),
@@ -80,6 +87,7 @@ struct TrackMapView: UIViewRepresentable {
 
         // ダブルタップして上下に動かす拡大縮小を自前で行う(向きを選べるようにするため)
         context.coordinator.zoom.install(on: map, downIn: zoomDownIn)
+        context.coordinator.map = map
         return map
     }
 
@@ -127,9 +135,19 @@ struct TrackMapView: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
+    /// 追尾のしかた
+    enum Follow { case off, northUp, headingUp }
+
     final class Coordinator: NSObject, MKMapViewDelegate {
         var parent: TrackMapView
         let zoom = OneFingerZoom()
+        weak var map: MKMapView?
+        weak var button: UIButton?
+        var follow: Follow = .northUp
+        /// 最後に分かった進行方向(止まっていると GPS の向きが出ないので覚えておく)
+        var lastCourse: CLLocationDirection = 0
+        /// 最初の位置で、街の様子が分かるくらいまで寄せたか
+        var zoomedIn = false
         var drawnCount = 0
         var line: MKPolyline?
         var tiles: MKTileOverlay?
@@ -151,13 +169,72 @@ struct TrackMapView: UIViewRepresentable {
             return r
         }
 
-        /// ボタンで選んだ向きを覚える(指で動かして追尾が外れたときは覚えない)
-        func mapView(_ mapView: MKMapView, didChange mode: MKUserTrackingMode, animated: Bool) {
-            switch mode {
-            case .follow: if parent.headingUp { DispatchQueue.main.async { self.parent.headingUp = false } }
-            case .followWithHeading: if !parent.headingUp { DispatchQueue.main.async { self.parent.headingUp = true } }
-            default: break
+        /// 右上のボタン: 追尾しない → 北が上 → 進行方向が上 → 追尾しない(MapKit の追尾ボタンと同じ順)
+        @objc func tapFollow() {
+            switch follow {
+            case .off: follow = .northUp
+            case .northUp: follow = .headingUp
+            case .headingUp: follow = .off
             }
+            // 選んだ向きを覚える(指で動かして追尾が外れたときは覚えない)
+            if follow != .off {
+                let up = follow == .headingUp
+                if parent.headingUp != up { DispatchQueue.main.async { self.parent.headingUp = up } }
+            }
+            updateButton()
+            if let map { recenter(map, animated: true) }
+        }
+
+        func updateButton() {
+            let name: String
+            switch follow {
+            case .off: name = "location"
+            case .northUp: name = "location.fill"
+            case .headingUp: name = "location.north.line.fill"
+            }
+            button?.setImage(UIImage(systemName: name), for: .normal)
+        }
+
+        func mapView(_ mapView: MKMapView, didUpdate userLocation: MKUserLocation) {
+            if let loc = userLocation.location, loc.course >= 0, loc.speed > 1 { lastCourse = loc.course }
+            recenter(mapView, animated: true)
+        }
+
+        /// 追尾中なら、距離はそのままで現在地を真ん中に、向きを北か進行方向に合わせる
+        func recenter(_ map: MKMapView, animated: Bool) {
+            guard follow != .off, let loc = map.userLocation.location else { return }
+            // 指で拡大縮小しているあいだは動かさない(指を離したあとの更新で合わせる)
+            if zoom.zooming || userIsTouching(map) { return }
+            let cam = map.camera.copy() as! MKMapCamera
+            cam.centerCoordinate = loc.coordinate
+            cam.heading = follow == .headingUp ? lastCourse : 0
+            if !zoomedIn {
+                zoomedIn = true
+                cam.centerCoordinateDistance = 2000
+                map.setCamera(cam, animated: false)
+            } else {
+                map.setCamera(cam, animated: animated)
+            }
+        }
+
+        /// 指で地図を引きずったら追尾をやめる(拡大縮小や回転だけなら続ける)
+        func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool) {
+            guard follow != .off, !zoom.zooming else { return }
+            if activeGestures(in: mapView).contains(where: { g in
+                g is UIPanGestureRecognizer && g.numberOfTouches == 1
+                    && String(describing: type(of: g)).range(of: "OneHanded", options: .caseInsensitive) == nil
+            }) {
+                follow = .off
+                updateButton()
+            }
+        }
+
+        private func userIsTouching(_ map: MKMapView) -> Bool { !activeGestures(in: map).isEmpty }
+
+        private func activeGestures(in view: UIView) -> [UIGestureRecognizer] {
+            var found = (view.gestureRecognizers ?? []).filter { $0.state == .began || $0.state == .changed }
+            for sub in view.subviews { found += activeGestures(in: sub) }
+            return found
         }
     }
 }
