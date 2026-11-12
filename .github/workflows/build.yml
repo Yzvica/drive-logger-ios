@@ -25,6 +25,10 @@ jobs:
           python3 tools/handcheck/make_fixture.py "$RUNNER_TEMP/handfixture"
           swiftc -O DriveLogger/Sources/DriveEval.swift DriveLogger/Sources/HandheldEval.swift tools/handcheck/main.swift -o handcheck
           ./handcheck "$RUNNER_TEMP/handfixture" tools/evalcheck/fixture
+      - name: 記録を分ける処理を確かめる
+        run: |
+          swiftc -O DriveLogger/Sources/FileWriters.swift DriveLogger/Sources/LogSplit.swift tools/splitcheck/main.swift -o splitcheck
+          ./splitcheck tools/evalcheck/fixture
       - name: 地図サーバーが書く天気(weather.json)を読めるか確かめる
         run: |
           swiftc -O DriveLogger/Sources/Weather.swift tools/weathercheck/main.swift -o weathercheck

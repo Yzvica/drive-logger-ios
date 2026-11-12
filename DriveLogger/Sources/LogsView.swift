@@ -161,6 +161,8 @@ struct SessionRow: View {
             Text("記録中").font(.caption.bold()).foregroundStyle(.red)
         } else if LogStore.allSent(meta) {
             Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+        } else if meta.resetPending == true {
+            Text("分けた記録を未送信").font(.caption).foregroundStyle(.orange)
         } else if meta.modeChangePending == true {
             Text("手段の変更を未送信").font(.caption).foregroundStyle(.orange)
         } else if meta.gpxSent {

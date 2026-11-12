@@ -35,6 +35,10 @@ struct SessionMeta: Codable, Identifiable, Hashable {
     var maxAltitudeM: Double?
     /// 記録したあとに移動手段を直し、地図サーバーにまだ伝えていなければ true(次に送るときに POST /api/rawlog/mode で伝える)
     var modeChangePending: Bool?
+    /// 記録を途中で分けたので、地図サーバーにある前の記録を消してから(DELETE /api/rawlog/session)最初から送り直すなら true
+    var resetPending: Bool?
+    /// 分けてできた記録なら、元の記録の走行ID(後半の記録に付ける)
+    var splitFrom: String?
 
     var travelMode: TravelMode { mode ?? .car }
 
@@ -243,6 +247,80 @@ final class LogStore: ObservableObject {
 
     static func allSent(_ meta: SessionMeta) -> Bool {
         (meta.gpxSent || !meta.travelMode.isCar) && rawFiles.allSatisfy(meta.rawSent.contains) && meta.modeChangePending != true
+            && meta.resetPending != true
+    }
+
+    // MARK: - 記録を分ける
+
+    /// 記録を at で2つに分ける(バスで移動したあと歩いた、など)。前半は同じ走行ID のまま modeA に、
+    /// 後半は分けた時刻の走行ID(yyyyMMdd-HHmmss)で modeB にする。運転評価は計算し直す。
+    /// 地図サーバーに送ってあれば、前の記録を消してから両方を送り直す。終わったらメインスレッドで done(後半の走行ID か エラー)
+    func split(_ id: String, at: Date, modeA: TravelMode, modeB: TravelMode, done: @escaping (Result<String, Error>) -> Void) {
+        guard var a = load(id), a.finished else { done(.failure(LogSplit.SplitError.tooShort)); return }
+        // 後半の走行ID。同じ ID の記録がもうあれば 1秒ずつずらす
+        var start = at
+        var newID = Fmt.sessionID.string(from: start)
+        while FileManager.default.fileExists(atPath: dir(newID).path) {
+            start = start.addingTimeInterval(1)
+            newID = Fmt.sessionID.string(from: start)
+        }
+        let from = dir(id), to = dir(newID)
+        let t = at.timeIntervalSince1970
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let (sa, sb) = try LogSplit.split(from: from, to: to, at: t, fromName: id, toName: newID)
+                var b = a
+                b.id = newID
+                b.start = at
+                b.end = a.end
+                b.markers = a.markers.filter { $0.time >= at }
+                b.mode = modeB
+                b.gpxSent = false
+                b.rawSent = []
+                b.modeChangePending = nil
+                b.resetPending = nil
+                b.splitFrom = id
+                LogStore.apply(sb, to: &b)
+
+                let sent = a.gpxSent || !a.rawSent.isEmpty
+                a.end = at
+                a.markers = a.markers.filter { $0.time < at }
+                a.mode = modeA
+                a.gpxSent = false
+                a.rawSent = []
+                a.modeChangePending = nil
+                if sent { a.resetPending = true }
+                LogStore.apply(sa, to: &a)
+
+                // 後半を先に書く(途中で落ちても前半の meta.json が古いままなら、もう一度分け直せる)
+                if let data = try? LogStore.encoder.encode(b) { try data.write(to: to.appendingPathComponent("meta.json"), options: .atomic) }
+                if let data = try? LogStore.encoder.encode(a) { try data.write(to: from.appendingPathComponent("meta.json"), options: .atomic) }
+                if modeA.hasDriveEval { LogStore.writeEvaluation(folder: from, allowHandheld: modeA.allowsHandheldEval) }
+                if modeB.hasDriveEval { LogStore.writeEvaluation(folder: to, allowHandheld: modeB.allowsHandheldEval) }
+                DispatchQueue.main.async {
+                    for x in [id, newID] {
+                        self.evalCache[x] = nil
+                        self.evalMissing.remove(x)
+                    }
+                    self.reload()
+                    done(.success(newID))
+                }
+            } catch {
+                // 途中まで作った後半のフォルダは消す(前半のファイルは、すべて分け終えるまで置き換えない…ただし CSV を置き換え始めたあとの失敗は残る)
+                if (try? FileManager.default.contentsOfDirectory(atPath: to.path))?.contains("meta.json") != true {
+                    try? FileManager.default.removeItem(at: to)
+                }
+                DispatchQueue.main.async { done(.failure(error)) }
+            }
+        }
+    }
+
+    /// 作り直した軌跡のまとめを meta に入れる
+    static func apply(_ s: LogSplit.TrackStats, to meta: inout SessionMeta) {
+        meta.points = s.points
+        meta.distanceM = s.distanceM
+        meta.maxSpeedMS = s.maxSpeedMS
+        meta.maxAltitudeM = s.maxAltitudeM
     }
 
     // MARK: - 移動手段を直す
