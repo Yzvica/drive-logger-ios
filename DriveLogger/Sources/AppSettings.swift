@@ -56,7 +56,7 @@ final class AppSettings: ObservableObject {
         }
     }
 
-    /// 記録中、ネットにつながっていれば気象庁の雨雲レーダーを5分ごとに取る
+    /// 記録中、ネットにつながっていれば気象庁の雨雲レーダー(5分ごと)とアメダスの実測(10分ごと)を取る
     @Published var rainRadar: Bool {
         didSet { UserDefaults.standard.set(rainRadar, forKey: "rainRadar") }
     }

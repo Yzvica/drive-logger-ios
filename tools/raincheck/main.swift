@@ -1,5 +1,5 @@
 // 気象庁の雨雲レーダーのタイルを RainRadar.swift で読めるかを確かめる(CI の macOS で動かす)
-//   swiftc -O DriveLogger/Sources/RainRadar.swift tools/raincheck/main.swift -o raincheck
+//   swiftc -O DriveLogger/Sources/RainRadar.swift DriveLogger/Sources/Amedas.swift tools/raincheck/main.swift -o raincheck
 //   ./raincheck tools/raincheck
 // rain_10_893_415.png は 2026-11-12 12:45 UTC の実際のタイル(z/x/y = 10/893/415)。
 // 正解は PC 側の fetch_rain_radar.js(decodePngToIntensities)で同じタイルを読んだ結果。
@@ -82,5 +82,48 @@ if let line = RainRadar.line(rec), let text = String(data: line, encoding: .utf8
 }
 let none = RainRadar.Record(v: "20261112124500", z: 10, x: 909, y: 403, core: false, png: nil)
 check("降水なしの行", RainRadar.line(none).flatMap { String(data: $0, encoding: .utf8) } == "{\"core\":false,\"v\":\"20261112124500\",\"x\":909,\"y\":403,\"z\":10}\n", "png なし")
+
+// 6. アメダス(観測所の一覧と、観測所ごとのデータ)
+if let tdata = try? Data(contentsOf: dir.appendingPathComponent("amedastable.json")),
+   let pdata = try? Data(contentsOf: dir.appendingPathComponent("amedas_point.json")) {
+    let list = Amedas.stations(tdata)
+    check("観測所の一覧", list.count == 3, "\(list.count) 件")
+    let tokyo = list.first { $0.code == "44132" }
+    check("緯度経度([度, 分])", tokyo.map { abs($0.lat - 35.6917) < 0.001 && abs($0.lon - 139.75) < 0.001 } ?? false,
+          tokyo.map { "\($0.lat), \($0.lon)" } ?? "なし")
+    check("気温のない観測所", list.first { $0.code == "44136" }?.hasTemp == false, "44136")
+    // 東京駅の近く: いちばん近いのは雨量だけの観測所、気温を測っている所では東京
+    let near = Amedas.nearest(list, lat: 35.681, lon: 139.767, count: 2)
+    check("最寄り", near.first?.station.code == "44136", near.map { "\($0.station.name) \(String(format: "%.1f", $0.km))km" }.joined(separator: ", "))
+    let nearT = Amedas.nearest(list, lat: 35.681, lon: 139.767, count: 1, where: { $0.hasTemp })
+    check("気温を測っている最寄り", nearT.first?.station.code == "44132", nearT.first?.station.name ?? "なし")
+    check("遠すぎる観測所は入れない", Amedas.nearest(list, lat: 26.2, lon: 127.7, count: 3).isEmpty, "那覇の近くに観測所なし")
+
+    if let tokyo, let o = Amedas.observation(pdata, station: tokyo, km: 2.04) {
+        check("いちばん新しい時刻", o.t == "20261112214000", o.t)
+        check("雨量", o.precip10m == 0.5 && o.precip1h == 1.5, "\(o.precip10m ?? -1) / \(o.precip1h ?? -1)")
+        check("気温・湿度", o.temp == 12.6 && o.humidity == 83, "\(o.temp ?? -1) / \(o.humidity ?? -1)")
+        check("風", Amedas.windText(o) == "西の風 2 m/s", Amedas.windText(o) ?? "なし")
+        check("距離は 0.1km に丸める", o.km == 2.0, "\(o.km)")
+        let f = DateFormatter(); f.timeZone = TimeZone(identifier: "UTC"); f.dateFormat = "HH:mm"
+        check("時刻は日本時間", o.time.map { f.string(from: $0) } == "12:40", o.time.map { f.string(from: $0) } ?? "なし")
+        let line = Amedas.line(o).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        check("保存する行", line.hasPrefix("{\"code\":\"44132\"") && line.hasSuffix("}\n"), line.trimmingCharacters(in: .newlines))
+    } else {
+        check("観測所ごとのデータを読む", false, "読めません")
+    }
+    if let tokyo, let o = Amedas.observation(pdata, station: tokyo, km: 1, at: "20261112213000") {
+        check("時刻を指定して読む", o.t == "20261112213000" && o.temp == 12.8 && o.precip1h == 0, o.t)
+    } else {
+        check("時刻を指定して読む", false, "読めません")
+    }
+    let jst = Amedas.keyFormat.date(from: "20261112214000")!
+    check("観測所ごとのデータの URL(3時間ごとのファイル)",
+          Amedas.pointURL(code: "44132", time: jst).absoluteString == "https://www.jma.go.jp/bosai/amedas/data/point/44132/20261112_21.json",
+          Amedas.pointURL(code: "44132", time: jst).absoluteString)
+    check("最新時刻の読み取り", Amedas.latest("2026-11-12T21:40:00+09:00\n".data(using: .utf8)!) == jst, "21:40 JST")
+} else {
+    check("アメダスの試験データ", false, "読めません")
+}
 
 exit(failed ? 1 : 0)

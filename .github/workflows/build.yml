@@ -24,9 +24,9 @@ jobs:
         run: |
           swiftc -O DriveLogger/Sources/Weather.swift tools/weathercheck/main.swift -o weathercheck
           ./weathercheck tools/weathercheck
-      - name: 気象庁の雨雲レーダーのタイルを読めるか確かめる
+      - name: 気象庁の雨雲レーダーのタイルとアメダスを読めるか確かめる
         run: |
-          swiftc -O DriveLogger/Sources/RainRadar.swift tools/raincheck/main.swift -o raincheck
+          swiftc -O DriveLogger/Sources/RainRadar.swift DriveLogger/Sources/Amedas.swift tools/raincheck/main.swift -o raincheck
           ./raincheck tools/raincheck
       - name: XcodeGen を入れる
         run: brew install xcodegen

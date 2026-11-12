@@ -179,8 +179,9 @@ final class LogStore: ObservableObject {
 
     /// 送る順番。evaluation.json は無ければ飛ばす(前の版の走行や、短すぎて評価できなかった走行)。
     /// unsent の判定には使わない(評価を足す前に送り終えた走行を、もう一度送らないため)
-    /// rain_radar.jsonl は記録中に取った雨雲レーダー(RainFetcher)。取れなかった走行には無い
-    static let uploadFiles = ["location.csv", "motion.csv", "pressure.csv", "evaluation.json", RainRadar.fileName, "meta.json"]
+    /// rain_radar.jsonl・amedas.jsonl は記録中に取った雨雲レーダーとアメダス(RainFetcher・AmedasFetcher)。取れなかった走行には無い
+    static let uploadFiles = ["location.csv", "motion.csv", "pressure.csv", "evaluation.json",
+                              RainRadar.fileName, Amedas.fileName, "meta.json"]
 
     private var evalCache: [String: Evaluation] = [:]
     /// evaluation.json が無かった走行(一覧を描くたびにファイルを探さないため)

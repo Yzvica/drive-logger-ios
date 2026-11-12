@@ -5,6 +5,7 @@ struct RecordView: View {
     @EnvironmentObject var recorder: Recorder
     @EnvironmentObject var settings: AppSettings
     @ObservedObject private var rain = RainFetcher.shared
+    @ObservedObject private var amedas = AmedasFetcher.shared
 
     var body: some View {
         VStack(spacing: 16) {
@@ -75,7 +76,8 @@ struct RecordView: View {
             }
 
             if recorder.isRecording && rain.active {
-                RainPanel(now: rain.now, ahead: rain.ahead, problem: rain.problem)
+                RainPanel(now: rain.now, ahead: rain.ahead, problem: rain.problem,
+                          amedasRain: amedas.rain, amedasWeather: amedas.weather)
             }
 
             if recorder.isRecording && mode.isCar {
@@ -227,6 +229,8 @@ struct RainPanel: View {
     let now: RainNow?
     let ahead: RainNow?
     let problem: String?
+    var amedasRain: Amedas.Observation? = nil
+    var amedasWeather: Amedas.Observation? = nil
 
     private static let clock: DateFormatter = {
         let f = DateFormatter()
@@ -266,6 +270,9 @@ struct RainPanel: View {
                      : "この先30分は降らない予測")
                     .font(.caption).foregroundStyle(ahead.level > (now?.level ?? 0) ? Color.orange : Color.secondary)
             }
+            if let r = amedasRain {
+                AmedasLine(rain: r, weather: amedasWeather)
+            }
             if let problem {
                 Text(problem).font(.caption2).foregroundStyle(.secondary)
             }
@@ -273,5 +280,45 @@ struct RainPanel: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+/// アメダス(最寄りの観測所の実測)の1行
+struct AmedasLine: View {
+    let rain: Amedas.Observation
+    let weather: Amedas.Observation?
+
+    private static let clock: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ja_JP")
+        f.timeZone = Amedas.jst
+        f.dateFormat = "H:mm"
+        return f
+    }()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 4) {
+                Image(systemName: "gauge.with.dots.needle.33percent").foregroundStyle(.secondary)
+                Text("アメダス \(rain.name)(\(String(format: "%.0f", rain.km))km)")
+                if let t = rain.time { Text("\(AmedasLine.clock.string(from: t))").foregroundStyle(.secondary) }
+            }
+            .font(.caption.bold())
+            Text(parts.joined(separator: " ・ "))
+                .font(.caption).monospacedDigit()
+        }
+        .padding(.top, 2)
+    }
+
+    private var parts: [String] {
+        var p: [String] = []
+        if let v = rain.precip10m { p.append("10分 \(Amedas.mm(v))mm") }
+        if let v = rain.precip1h { p.append("1時間 \(Amedas.mm(v))mm") }
+        if let w = weather {
+            let other = w.code != rain.code ? "(\(w.name))" : ""
+            if let t = w.temp { p.append(String(format: "%.1f℃", t) + other) }
+            if let s = Amedas.windText(w) { p.append(s) }
+        }
+        return p
     }
 }
