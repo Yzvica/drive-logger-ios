@@ -85,6 +85,9 @@ struct SettingsView: View {
                     if let commit = AppInfo.commit {
                         LabeledContent("コミット", value: commit)
                     }
+                    if let pr = AppInfo.pullRequest {
+                        LabeledContent("プルリクエスト", value: pr)
+                    }
                 }
             }
             .navigationTitle("設定")
@@ -103,7 +106,7 @@ struct SettingsView: View {
     }
 }
 
-/// アプリのバージョン。ビルド番号は CI の実行番号(GitHub Actions の Run 番号)、コミットは CI がビルドしたもの
+/// アプリのバージョン。ビルド番号は CI の実行番号(GitHub Actions の Run 番号)、コミットとプルリクエストの番号は CI がビルドしたもの
 enum AppInfo {
     private static var info: [String: Any] { Bundle.main.infoDictionary ?? [:] }
 
@@ -116,5 +119,12 @@ enum AppInfo {
     static var commit: String? {
         guard let c = info["GitCommit"] as? String, !c.isEmpty else { return nil }
         return c
+    }
+
+    /// ビルドのもとになったプルリクエスト。main のビルドは最後にマージしたもの、
+    /// プルリクエストのビルドはそのプルリクエスト(まだマージしていないので、そう書く)
+    static var pullRequest: String? {
+        guard let n = info["GitPR"] as? String, !n.isEmpty else { return nil }
+        return (info["GitEvent"] as? String) == "pull_request" ? "#\(n)(マージ前)" : "#\(n)"
     }
 }
