@@ -133,7 +133,7 @@ final class AmedasFetcher: ObservableObject {
 
     /// 観測所の一覧。端末に保存したものが30日以内ならそれを使う
     private static var tableCache: [Amedas.Station] = []
-    private static func table() async -> [Amedas.Station] {
+    static func table() async -> [Amedas.Station] {
         if !tableCache.isEmpty { return tableCache }
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         let url = dir.appendingPathComponent("amedastable.json")
