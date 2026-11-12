@@ -1,5 +1,5 @@
 // 振り返り画面のデータ(ReviewData.swift)が、サンプルの走行から作れるかを確かめる(CI の macOS で動かす)
-//   swiftc -O DriveLogger/Sources/DriveEval.swift DriveLogger/Sources/ReviewData.swift tools/reviewcheck/main.swift -o reviewcheck
+//   swiftc -O DriveLogger/Sources/DriveEval.swift DriveLogger/Sources/HandheldEval.swift DriveLogger/Sources/ReviewData.swift tools/reviewcheck/main.swift -o reviewcheck
 //   ./reviewcheck tools/evalcheck/fixture
 import Foundation
 

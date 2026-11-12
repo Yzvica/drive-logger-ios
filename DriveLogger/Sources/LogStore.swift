@@ -201,11 +201,12 @@ final class LogStore: ObservableObject {
         return e
     }
 
-    /// 評価を計算して evaluation.json に書く(時間がかかるので、メインスレッドでは呼ばない)
+    /// 評価を計算して evaluation.json に書く(時間がかかるので、メインスレッドでは呼ばない)。
+    /// allowHandheld = true(同乗)なら、固定されていない端末でも手持ちの方法で評価する
     @discardableResult
-    static func writeEvaluation(folder: URL) -> Evaluation? {
+    static func writeEvaluation(folder: URL, allowHandheld: Bool = false) -> Evaluation? {
         do {
-            let e = try DriveEval.evaluate(folder: folder)
+            let e = try DriveEval.evaluate(folder: folder, allowHandheld: allowHandheld)
             let enc = JSONEncoder()
             enc.outputFormatting = [.prettyPrinted, .sortedKeys]
             try enc.encode(e).write(to: folder.appendingPathComponent("evaluation.json"), options: .atomic)
@@ -219,8 +220,9 @@ final class LogStore: ObservableObject {
     /// 裏で評価を計算し、終わったらメインスレッドで done を呼ぶ
     func evaluate(_ id: String, done: @escaping (Evaluation?) -> Void) {
         let folder = dir(id)
+        let handheld = (sessions.first { $0.id == id } ?? load(id))?.travelMode.allowsHandheldEval ?? false
         DispatchQueue.global(qos: .userInitiated).async {
-            let e = LogStore.writeEvaluation(folder: folder)
+            let e = LogStore.writeEvaluation(folder: folder, allowHandheld: handheld)
             DispatchQueue.main.async {
                 if let e {
                     self.evalCache[id] = e

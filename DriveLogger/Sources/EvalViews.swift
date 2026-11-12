@@ -80,7 +80,19 @@ struct EvalSummary: View {
                 Label("\(worst.name): \(tip)", systemImage: "lightbulb")
                     .font(.footnote).foregroundStyle(.secondary)
             }
-            if let q = eval.axesQuality, q < 0.5 {
+            if eval.mount == "hand" {
+                let r = eval.usableRatio ?? 0
+                Label(String(format: "手持ちで記録(参考値)・採点に使えた時間 %.0f%%", r * 100), systemImage: "hand.raised")
+                    .font(.footnote).foregroundStyle(r < 0.5 ? .orange : .secondary)
+                if r < 0.5 {
+                    Text("端末を動かした時間が長く、躍度・急な操作・止まり際・カーブの確かさが下がります")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            } else if eval.mount == "fixed" {
+                Label("端末を固定して記録(同乗)", systemImage: "iphone")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            if eval.mount != "hand", let q = eval.axesQuality, q < 0.5 {
                 Label("端末の固定が甘かったかもしれません(点数の確かさが下がります)", systemImage: "exclamationmark.triangle")
                     .font(.footnote).foregroundStyle(.orange)
             }
