@@ -171,6 +171,11 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         location.startUpdatingHeading()
         startMotion(hz: m.motionHz, uptimeToUnix: uptimeToUnix)
         startAltimeter(uptimeToUnix: uptimeToUnix)
+        // 雨雲レーダー(ネットにつながっているときだけ取れる)。飛行機では取らない
+        if mode != .plane {
+            RainFetcher.shared.start(folder: dir, at: now)
+            AmedasFetcher.shared.start(folder: dir)
+        }
 
         // 車なら、記録を始めたときに動画と合わせる合図(光と音)を自動で1回出す。
         // 電車や飛行機の中では音を鳴らさない
@@ -215,6 +220,8 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         motion.stopDeviceMotionUpdates()
         altimeter.stopRelativeAltitudeUpdates()
         stopGPSWatch()
+        RainFetcher.shared.stop()
+        AmedasFetcher.shared.stop()
         isRecording = false
         updateIdleTimer()
         motionQueue.waitUntilAllOperationsAreFinished()
@@ -383,7 +390,11 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
             self.updateDisplayedSpeed(speed: speed, estimated: estimated)
             self.horizontalAccuracy = loc.horizontalAccuracy
             self.altitudeM = altitude
-            if good { self.track.append(loc.coordinate) }
+            if good {
+                self.track.append(loc.coordinate)
+                RainFetcher.shared.note(lat: loc.coordinate.latitude, lon: loc.coordinate.longitude, time: loc.timestamp)
+                AmedasFetcher.shared.note(lat: loc.coordinate.latitude, lon: loc.coordinate.longitude, time: loc.timestamp)
+            }
             self.io.async { let m = self.meta; DispatchQueue.main.async { if self.isRecording { self.current = m } } }
         }
     }

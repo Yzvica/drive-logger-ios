@@ -56,6 +56,11 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    /// 記録中、ネットにつながっていれば気象庁の雨雲レーダー(5分ごと)とアメダスの実測(10分ごと)を取る
+    @Published var rainRadar: Bool {
+        didSet { UserDefaults.standard.set(rainRadar, forKey: "rainRadar") }
+    }
+
     /// 音を一切鳴らさず、画面の表示だけで知らせる(同期・目印・停止・急な操作)
     @Published var soundOff: Bool {
         didSet { UserDefaults.standard.set(soundOff, forKey: "soundOff") }
@@ -71,6 +76,7 @@ final class AppSettings: ObservableObject {
         let d = UserDefaults.standard
         oneFingerZoomDownIn = d.object(forKey: "oneFingerZoomDownIn") as? Bool ?? true
         soundOff = d.bool(forKey: "soundOff")
+        rainRadar = d.object(forKey: "rainRadar") as? Bool ?? true
         uploadWifiOnly = d.object(forKey: "uploadWifiOnly") as? Bool ?? true
         gpsVibrate = d.object(forKey: "gpsVibrate") as? Bool ?? true
         travelMode = d.string(forKey: "travelMode").flatMap(TravelMode.init(rawValue:)) ?? .car

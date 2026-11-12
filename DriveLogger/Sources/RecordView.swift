@@ -4,6 +4,8 @@ import SwiftUI
 struct RecordView: View {
     @EnvironmentObject var recorder: Recorder
     @EnvironmentObject var settings: AppSettings
+    @ObservedObject private var rain = RainFetcher.shared
+    @ObservedObject private var amedas = AmedasFetcher.shared
 
     var body: some View {
         VStack(spacing: 16) {
@@ -71,6 +73,11 @@ struct RecordView: View {
             if !recorder.isRecording && recorder.keepingAliveForUpload {
                 Text("地図へ送り終えるまで、裏で起動したままにしています")
                     .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            }
+
+            if recorder.isRecording && rain.active {
+                RainPanel(now: rain.now, ahead: rain.ahead, problem: rain.problem,
+                          amedasRain: amedas.rain, amedasWeather: amedas.weather)
             }
 
             if recorder.isRecording && mode.isCar {
@@ -214,5 +221,104 @@ struct RecordView: View {
         }
         .buttonStyle(.borderedProminent)
         .tint(color)
+    }
+}
+
+/// 記録中、いまいる場所の雨(気象庁の雨雲レーダー)を出す
+struct RainPanel: View {
+    let now: RainNow?
+    let ahead: RainNow?
+    let problem: String?
+    var amedasRain: Amedas.Observation? = nil
+    var amedasWeather: Amedas.Observation? = nil
+
+    private static let clock: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ja_JP")
+        f.dateFormat = "H:mm"
+        return f
+    }()
+
+    /// 気象庁の凡例の色(降っていないときは灰色)
+    static func color(_ level: Int) -> Color {
+        guard level >= 1, level <= RainRadar.colors.count else { return Color.gray.opacity(0.4) }
+        let c = RainRadar.colors[level - 1]
+        return Color(red: Double(c.r) / 255, green: Double(c.g) / 255, blue: Double(c.b) / 255)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: (now?.level ?? 0) > 0 ? "cloud.rain.fill" : "cloud")
+                    .foregroundStyle(.secondary)
+                if let now {
+                    Circle().fill(RainPanel.color(now.level)).frame(width: 12, height: 12)
+                        .overlay(Circle().stroke(Color.secondary, lineWidth: 0.5))
+                    Text(now.level > 0 ? "雨 \(RainRadar.label(now.level))" : "雨は降っていない")
+                        .font(.subheadline.bold())
+                    Text("\(RainPanel.clock.string(from: now.time)) 時点")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text(problem == nil ? "雨雲レーダーを取っています…" : "雨雲レーダーを取れていません")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            if let ahead, now != nil {
+                Text(ahead.level > 0
+                     ? "この先30分の予測: 最大 \(RainRadar.label(ahead.level))(\(RainPanel.clock.string(from: ahead.time)) ごろ)"
+                     : "この先30分は降らない予測")
+                    .font(.caption).foregroundStyle(ahead.level > (now?.level ?? 0) ? Color.orange : Color.secondary)
+            }
+            if let r = amedasRain {
+                AmedasLine(rain: r, weather: amedasWeather)
+            }
+            if let problem {
+                Text(problem).font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+/// アメダス(最寄りの観測所の実測)の1行
+struct AmedasLine: View {
+    let rain: Amedas.Observation
+    let weather: Amedas.Observation?
+
+    private static let clock: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ja_JP")
+        f.timeZone = Amedas.jst
+        f.dateFormat = "H:mm"
+        return f
+    }()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 4) {
+                Image(systemName: "gauge.with.dots.needle.33percent").foregroundStyle(.secondary)
+                Text("アメダス \(rain.name)(\(String(format: "%.0f", rain.km))km)")
+                if let t = rain.time { Text("\(AmedasLine.clock.string(from: t))").foregroundStyle(.secondary) }
+            }
+            .font(.caption.bold())
+            Text(parts.joined(separator: " ・ "))
+                .font(.caption).monospacedDigit()
+        }
+        .padding(.top, 2)
+    }
+
+    private var parts: [String] {
+        var p: [String] = []
+        if let v = rain.precip10m { p.append("10分 \(Amedas.mm(v))mm") }
+        if let v = rain.precip1h { p.append("1時間 \(Amedas.mm(v))mm") }
+        if let w = weather {
+            let other = w.code != rain.code ? "(\(w.name))" : ""
+            if let t = w.temp { p.append(String(format: "%.1f℃", t) + other) }
+            if let s = Amedas.windText(w) { p.append(s) }
+        }
+        return p
     }
 }
