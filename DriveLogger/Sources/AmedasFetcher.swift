@@ -71,6 +71,8 @@ final class AmedasFetcher: ObservableObject {
         var weather: Amedas.Observation?
         var latest: Date?
         var ok = false
+        /// 前に取った時刻から新しい観測がまだ出ていない
+        var unchanged = false
     }
 
     private func tick() {
@@ -78,8 +80,9 @@ final class AmedasFetcher: ObservableObject {
               Date().timeIntervalSince(here.t) < 10 * 60 else { return }
         busy = true
         let gen = generation
+        let last = rain?.t
         Task.detached(priority: .utility) {
-            let out = await AmedasFetcher.run(lat: here.lat, lon: here.lon)
+            let out = await AmedasFetcher.run(lat: here.lat, lon: here.lon, skipKey: last)
             DispatchQueue.main.async { AmedasFetcher.shared.apply(out, generation: gen) }
         }
     }
@@ -95,6 +98,8 @@ final class AmedasFetcher: ObservableObject {
             }
             return
         }
+        // 新しい観測が出るのは観測の約7分後。まだなら1分後にまた見る
+        if out.unchanged { return }
         for o in [out.rain, out.weather].compactMap({ $0 }) {
             let key = "\(o.code)_\(o.t)"
             if saved.contains(key) { continue }
@@ -103,8 +108,8 @@ final class AmedasFetcher: ObservableObject {
         }
         rain = out.rain
         weather = out.weather ?? out.rain
-        // 次の観測が出るころまで聞きに行かない(10分おき。出るのは観測の数分後)
-        if let latest = out.latest { nextPoll = latest.addingTimeInterval(12 * 60) }
+        // 次の観測が出るころまで聞きに行かない(10分おき。出るのは観測の約7分後)
+        if let latest = out.latest { nextPoll = latest.addingTimeInterval(16 * 60) }
     }
 
     private func append(_ data: Data) {
@@ -151,13 +156,17 @@ final class AmedasFetcher: ObservableObject {
         return tableCache
     }
 
-    private static func run(lat: Double, lon: Double) async -> Outcome {
+    private static func run(lat: Double, lon: Double, skipKey: String?) async -> Outcome {
         var out = Outcome()
         let stations = await table()
         guard !stations.isEmpty, let lt = await get(Amedas.latestURL), let latest = Amedas.latest(lt) else { return out }
         out.latest = latest
         out.ok = true
         let key = Amedas.keyFormat.string(from: latest)
+        if key == skipKey {
+            out.unchanged = true
+            return out
+        }
         // 雨量は最寄りの観測所。値が無ければ(欠測など)次に近い所
         for c in Amedas.nearest(stations, lat: lat, lon: lon, count: 3) {
             guard let d = await get(Amedas.pointURL(code: c.station.code, time: latest)),

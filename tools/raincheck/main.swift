@@ -117,6 +117,13 @@ if let tdata = try? Data(contentsOf: dir.appendingPathComponent("amedastable.jso
     } else {
         check("時刻を指定して読む", false, "読めません")
     }
+    // 欠測(6)・休止中(5)・資料不足(4)は使わない。準正常(1)は使う
+    if let tokyo, let o = Amedas.observation(pdata, station: tokyo, km: 1, at: "20261112212000") {
+        check("品質フラグ", o.temp == nil && o.precip10m == nil && o.humidity == nil && o.wind == nil && o.precip1h == 0,
+              "temp=\(String(describing: o.temp)) p10=\(String(describing: o.precip10m)) hum=\(String(describing: o.humidity)) p1h=\(String(describing: o.precip1h))")
+    } else {
+        check("品質フラグ", false, "読めません")
+    }
     let jst = Amedas.keyFormat.date(from: "20261112214000")!
     check("観測所ごとのデータの URL(3時間ごとのファイル)",
           Amedas.pointURL(code: "44132", time: jst).absoluteString == "https://www.jma.go.jp/bosai/amedas/data/point/44132/20261112_21.json",

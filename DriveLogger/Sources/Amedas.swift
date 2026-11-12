@@ -112,7 +112,8 @@ enum Amedas {
         var time: Date? { Amedas.keyFormat.date(from: t) }
     }
 
-    /// 値は [数値, 品質] の2つ。品質が 0(正常)か 1(準正常)のものだけ使う
+    /// 値は [数値, 品質] の2つ。品質が 0(正常)か 1(準正常)で値が null でないものだけ使う
+    /// (気象庁のアメダスの画面と同じ扱い。4 = 資料不足・5 = 休止中・6 = 欠測など)
     private static func value(_ any: Any?) -> Double? {
         guard let a = any as? [Any], let v = a.first as? NSNumber else { return nil }
         if a.count >= 2, let q = a[1] as? NSNumber, q.intValue > 1 { return nil }
