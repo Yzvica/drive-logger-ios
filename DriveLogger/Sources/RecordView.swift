@@ -108,7 +108,7 @@ struct RecordView: View {
             } else if !recorder.isRecording, let last = recorder.lastEvaluation {
                 // 止めた直後に今回の評価を出す(詳しくはログの画面で)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("今回の運転").font(.caption.bold()).foregroundStyle(.secondary)
+                    Text(last.eval.mount == nil ? "今回の運転" : "今回の運転(同乗)").font(.caption.bold()).foregroundStyle(.secondary)
                     EvalSummary(eval: last.eval)
                 }
                 .padding(10)
@@ -132,10 +132,15 @@ struct RecordView: View {
                             Text("・空が見える所で、GPS 精度が ±10m 前後になってから発進")
                             Text("・停止は走り終えてから(途中で押すと走行が分かれます)")
                         } else {
-                            Text("・\(mode.title)の記録は地図(国道の判定)には送りません。運転評価もしません")
-                            Text("・記録中は音を鳴らしません")
                             if mode == .ride {
+                                Text("・\(mode.title)の記録は地図(国道の判定)には送りません。運転評価は出します")
+                                Text("・記録中は音を鳴らしません")
                                 Text("・バス・タクシー・人の運転する車など、自分が運転していない車の移動に使います")
+                                Text("・ホルダーなどで固定すると、車と同じ確かさで評価できます")
+                                Text("・手持ちやポケットでも評価できます(参考値。端末を動かした区間は採点から外します)")
+                            } else {
+                                Text("・\(mode.title)の記録は地図(国道の判定)には送りません。運転評価もしません")
+                                Text("・記録中は音を鳴らしません")
                             }
                             if mode == .plane {
                                 Text("・機内モードでも GPS は使えます。窓際でないとほとんど測位できません")

@@ -147,7 +147,7 @@ struct SessionRow: View {
                         .accessibilityLabel(meta.travelMode.title)
                 }
                 Text(Display.date.string(from: meta.start)).font(.headline)
-                if meta.travelMode.isCar, let e = store.evaluation(meta.id) { ScoreBadge(score: e.score) }
+                if meta.travelMode.hasDriveEval, let e = store.evaluation(meta.id) { ScoreBadge(score: e.score) }
                 Spacer()
                 status(meta)
             }
@@ -203,9 +203,10 @@ struct LogDetailView: View {
                 if meta.finished && meta.travelMode != .plane {
                     WeatherSection(meta: meta)
                 }
-                if meta.travelMode.isCar {
+                if meta.travelMode.hasDriveEval {
                     EvalSection(id: meta.id, finished: meta.finished)
-                } else {
+                }
+                if !meta.travelMode.isCar {
                     Section {
                         Text("\(meta.travelMode.title)の記録は地図に送らず、生データだけを Google ドライブの _drivelog\\trips に送ります")
                             .font(.footnote).foregroundStyle(.secondary)

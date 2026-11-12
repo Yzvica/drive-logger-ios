@@ -1,5 +1,5 @@
 // 運転評価の Swift 版が、gbowl-log-formatter の Python 版と同じ結果になるかを確かめる(CI の macOS で動かす)
-//   swiftc -O DriveLogger/Sources/DriveEval.swift DriveLogger/Sources/LiveCoach.swift tools/evalcheck/main.swift -o evalcheck
+//   swiftc -O DriveLogger/Sources/DriveEval.swift DriveLogger/Sources/HandheldEval.swift DriveLogger/Sources/LiveCoach.swift tools/evalcheck/main.swift -o evalcheck
 //   ./evalcheck tools/evalcheck/fixture tools/evalcheck/expected.json
 import Foundation
 

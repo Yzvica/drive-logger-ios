@@ -58,8 +58,9 @@ struct ReviewData {
 
 enum ReviewLoader {
     /// 走行フォルダを読む。motion = false(車以外)なら加速度は読まない。
-    /// pressure = false なら高度に気圧を使わない(飛行機は機内が与圧されていて、気圧が外の高度と合わないため)
-    static func load(folder: URL, motion: Bool, pressure: Bool = true) throws -> ReviewData {
+    /// pressure = false なら高度に気圧を使わない(飛行機は機内が与圧されていて、気圧が外の高度と合わないため)。
+    /// handheld = true(同乗)なら、端末が固定されていなければ手持ちの方法で前後G・横Gを出す
+    static func load(folder: URL, motion: Bool, pressure: Bool = true, handheld: Bool = false) throws -> ReviewData {
         let rows = try DriveEval.readCSV(locationFile(folder), columns: ["unix_s", "lat", "lon", "alt_m", "h_acc_m", "v_acc_m", "speed_ms", "speed_est_ms"])
         var gps: [(t: Double, la: Double, lo: Double, alt: Double?, sp: Double?)] = []
         for r in rows {
@@ -75,7 +76,7 @@ enum ReviewLoader {
         // 車なら評価と同じ方法で 10 Hz にそろえ、前後G・横G・躍度を出す
         var dense: [(t: Double, la: Double, lo: Double, kmh: Double, lonG: Double?, latG: Double?, jerk: Double?)] = []
         var hasMotion = false
-        if motion, let m = try? motionRows(folder: folder) {
+        if motion, let m = try? motionRows(folder: folder, handheld: handheld) {
             dense = m
             hasMotion = true
         } else {
@@ -139,16 +140,13 @@ enum ReviewLoader {
     }
 
     /// 10 Hz の行(DriveEval と同じ車の向き・停止の判定・ならし方)
-    static func motionRows(folder: URL) throws -> [(t: Double, la: Double, lo: Double, kmh: Double, lonG: Double?, latG: Double?, jerk: Double?)] {
+    static func motionRows(folder: URL, handheld: Bool = false) throws -> [(t: Double, la: Double, lo: Double, kmh: Double, lonG: Double?, latG: Double?, jerk: Double?)] {
         // 車の向きは評価と同じく GPS の点だけで決め、位置と速度は補った点も使う
         let gpsLocs = try DriveEval.loadLocations(folder.appendingPathComponent("location.csv"))
         let locs = try reviewLocations(folder)
         let mot = try DriveEval.loadMotion(folder.appendingPathComponent("motion.csv"))
-        guard let l0 = locs.first, let l1 = locs.last, let m0 = mot.first, let m1 = mot.last else { throw DriveEvalError.noData }
-        let axes = try DriveEval.vehicleAxes(locs: gpsLocs, mot: mot)
-        let s0 = max(l0.t, m0.t), s1 = min(l1.t, m1.t)
-        guard s1 > s0 else { throw DriveEvalError.noData }
-        let rows = DriveEval.resample(locs: locs, mot: mot, axes: axes, t0: s0, t1: s1)
+        let p = try DriveEval.prepare(locs: locs, gpsLocs: gpsLocs, mot: mot, allowHandheld: handheld)
+        let rows = p.rows, s0 = p.t0
         let g0 = DriveEval.G0
         let w = Int(DriveEval.jerkSmoothS * Double(DriveEval.HZ) / 2)
         let slon = DriveEval.smooth(rows.map { -$0.ry * g0 }, w)

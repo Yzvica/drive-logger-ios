@@ -48,21 +48,27 @@ struct Evaluation: Codable, Hashable {
     /// 端末の向き合わせの確かさ(GPS の速度の変化との相関。0.5 未満なら固定が甘い)
     var axesQuality: Double?
     var source: String? = "iphone"
+    /// 端末の持ち方。"fixed"(固定)か "hand"(手持ち。同乗のときだけ)。車の評価には付けない
+    var mount: String?
+    /// 手持ちのとき、走行中のうち採点に使えた時間の割合(手で端末を動かした区間は外す)
+    var usableRatio: Double?
 
     enum CodingKeys: String, CodingKey {
-        case version, score, items, stops, events, source
-        case movingS = "moving_s", axesQuality = "axes_quality"
+        case version, score, items, stops, events, source, mount
+        case movingS = "moving_s", axesQuality = "axes_quality", usableRatio = "usable_ratio"
     }
 }
 
 enum DriveEvalError: LocalizedError {
     case noData
     case tooShort
+    case noAttitude
 
     var errorDescription: String? {
         switch self {
         case .noData: return "位置か加速度のデータがありません"
         case .tooShort: return "走っている時間が短すぎて、端末の向きを決められません"
+        case .noAttitude: return "端末の姿勢の記録がないため、手持ちの評価ができません"
         }
     }
 }
@@ -114,24 +120,67 @@ enum DriveEval {
         var a: Vec3
         var g: Vec3
         var r: Vec3
+        /// 端末の姿勢(Core Motion の attitude)。手持ちの評価に使う。古い記録には無い
+        var q: Quat? = nil
     }
 
-    /// 走行フォルダ(location.csv と motion.csv)を評価する
-    static func evaluate(folder: URL) throws -> Evaluation {
+    /// 走行フォルダ(location.csv と motion.csv)を評価する。
+    /// allowHandheld = true(同乗)なら、端末が固定されていなかったときは手持ちの方法で評価する
+    static func evaluate(folder: URL, allowHandheld: Bool = false) throws -> Evaluation {
         let locs = try loadLocations(folder.appendingPathComponent("location.csv"))
         let mot = try loadMotion(folder.appendingPathComponent("motion.csv"))
-        return try evaluate(locs: locs, mot: mot)
+        return try evaluate(locs: locs, mot: mot, allowHandheld: allowHandheld)
     }
 
-    static func evaluate(locs: [Loc], mot: [Mot]) throws -> Evaluation {
+    static func evaluate(locs: [Loc], mot: [Mot], allowHandheld: Bool = false) throws -> Evaluation {
+        let p = try prepare(locs: locs, gpsLocs: locs, mot: mot, allowHandheld: allowHandheld)
+        var ev = evaluate(rows: p.rows, t0Unix: p.t0)
+        ev.axesQuality = (p.quality * 100).rounded() / 100
+        ev.mount = p.mount
+        ev.usableRatio = p.usable.map { round($0, 3) }
+        return ev
+    }
+
+    /// 評価に使う 10 Hz の行
+    struct Prepared {
+        var rows: [Row]
+        var t0: Double
+        /// 向き合わせの確かさ(GPS の速度の変化との相関)
+        var quality: Double
+        /// "fixed" か "hand"。allowHandheld = false(車)なら nil
+        var mount: String?
+        /// 手持ちのとき、走行中のうち採点に使えた割合
+        var usable: Double?
+    }
+
+    /// 端末の向きを車に合わせて 10 Hz の行にする。
+    /// locs は位置と速度に使う点、gpsLocs は向き合わせに使う点(GPS で測れた点だけ)
+    static func prepare(locs: [Loc], gpsLocs: [Loc], mot: [Mot], allowHandheld: Bool) throws -> Prepared {
         guard let l0 = locs.first, let l1 = locs.last, let m0 = mot.first, let m1 = mot.last else { throw DriveEvalError.noData }
-        let axes = try vehicleAxes(locs: locs, mot: mot)
+        if !allowHandheld {
+            let axes = try vehicleAxes(locs: gpsLocs, mot: mot)
+            let s0 = max(l0.t, m0.t), s1 = min(l1.t, m1.t)
+            guard s1 > s0 else { throw DriveEvalError.noData }
+            return Prepared(rows: resample(locs: locs, mot: mot, axes: axes, t0: s0, t1: s1), t0: s0,
+                            quality: axes.quality, mount: nil, usable: nil)
+        }
         let s0 = max(l0.t, m0.t), s1 = min(l1.t, m1.t)
         guard s1 > s0 else { throw DriveEvalError.noData }
-        let rows = resample(locs: locs, mot: mot, axes: axes, t0: s0, t1: s1)
-        var ev = evaluate(rows: rows, t0Unix: s0)
-        ev.axesQuality = (axes.quality * 100).rounded() / 100
-        return ev
+        // 重力の向きがほとんど変わらず、向き合わせもうまくいけば固定とみなす(車と同じ方法)
+        let axes = try? vehicleAxes(locs: gpsLocs, mot: mot)
+        if let axes, axes.quality >= fixedMinQuality, gravitySteady(mot) {
+            return Prepared(rows: resample(locs: locs, mot: mot, axes: axes, t0: s0, t1: s1), t0: s0,
+                            quality: axes.quality, mount: "fixed", usable: nil)
+        }
+        do {
+            let h = try handheldRows(locs: locs, gpsLocs: gpsLocs, mot: mot, t0: s0, t1: s1)
+            return Prepared(rows: h.rows, t0: s0, quality: h.quality, mount: "hand", usable: h.usable)
+        } catch {
+            // 姿勢の記録が無いなどで手持ちの方法が使えなければ、固定として評価する
+            guard let axes else { throw error }
+            return Prepared(rows: resample(locs: locs, mot: mot, axes: axes, t0: s0, t1: s1), t0: s0,
+                            quality: axes.quality, mount: "fixed", usable: nil)
+        }
     }
 
     /// CSV を見出しの名前で読む。数にならない欄は nil
@@ -166,13 +215,15 @@ enum DriveEval {
 
     static func loadMotion(_ url: URL) throws -> [Mot] {
         let rows = try readCSV(url, columns: ["unix_s", "ax_g", "ay_g", "az_g", "grav_x", "grav_y", "grav_z",
-                                              "rot_x_rads", "rot_y_rads", "rot_z_rads"])
+                                              "rot_x_rads", "rot_y_rads", "rot_z_rads", "q_w", "q_x", "q_y", "q_z"])
         var out: [Mot] = []
         out.reserveCapacity(rows.count)
         for r in rows {
-            let v = r.compactMap { $0 }
+            let v = r[0..<10].compactMap { $0 }
             guard v.count == 10 else { continue }
-            out.append(Mot(t: v[0], a: Vec3(v[1], v[2], v[3]), g: Vec3(v[4], v[5], v[6]), r: Vec3(v[7], v[8], v[9])))
+            var q: Quat?
+            if let w = r[10], let x = r[11], let y = r[12], let z = r[13] { q = Quat(w: w, x: x, y: y, z: z) }
+            out.append(Mot(t: v[0], a: Vec3(v[1], v[2], v[3]), g: Vec3(v[4], v[5], v[6]), r: Vec3(v[7], v[8], v[9]), q: q))
         }
         return out.sorted { $0.t < $1.t }
     }
@@ -286,6 +337,8 @@ enum DriveEval {
         var lat: Double
         var lon: Double
         var stopped: Bool
+        /// 採点に使える行か(手持ちで端末を手で動かした区間は false。固定ならいつも true)
+        var valid: Bool = true
     }
 
     static func lerpDeg(_ a: Double, _ b: Double, _ r: Double) -> Double {
@@ -342,8 +395,16 @@ enum DriveEval {
 
         var gps = (0..<n).map { locationAt(locs, lts, t0 + Double($0) / Double(HZ)) }
         let stopped = detectStops(yaw: raw.map { $0.yaw }, vib: vib, gpsKmh: gps.map { $0.sp * 3.6 })
+        applyStops(&gps, stopped)
 
-        // 止まっている間は速度 0、位置は停止中の中央値に固定する
+        return (0..<n).map { i in
+            Row(rx: raw[i].x, ry: raw[i].y, kmh: gps[i].sp * 3.6, lat: gps[i].la, lon: gps[i].lo, stopped: stopped[i])
+        }
+    }
+
+    /// 止まっている間は速度 0、位置は停止中の中央値に固定する(前後 1 秒はなめらかにつなぐ)
+    static func applyStops(_ gps: inout [(la: Double, lo: Double, sp: Double)], _ stopped: [Bool]) {
+        let n = gps.count
         var i = 0
         while i < n {
             if !stopped[i] { i += 1; continue }
@@ -360,10 +421,6 @@ enum DriveEval {
                 gps[k] = (mla + (g.la - mla) * f, mlo + (g.lo - mlo) * f, g.sp * f)
             }
             i = j
-        }
-
-        return (0..<n).map { i in
-            Row(rx: raw[i].x, ry: raw[i].y, kmh: gps[i].sp * 3.6, lat: gps[i].la, lon: gps[i].lo, stopped: stopped[i])
         }
     }
 
@@ -506,6 +563,10 @@ enum DriveEval {
         let lat = rows.map { $0.rx * G0 }  // 左向きの加速度(m/s^2)
         let moving = rows.map { $0.kmh > movingKmh }
         let tMoving = Double(moving.filter { $0 }.count) / hz
+        // 採点に使える行(手持ちで端末を手で動かした区間を除く)。固定なら全部
+        let ok = rows.map(\.valid)
+        let use = (0..<n).map { moving[$0] && ok[$0] }
+        let tUse = Double(use.filter { $0 }.count) / hz
 
         // ならしてから微分する(路面の段差などの細かい揺れを躍度と見ないように)
         let w = Int(jerkSmoothS * hz / 2)
@@ -513,7 +574,7 @@ enum DriveEval {
         let jlon = diff(slon), jlat = diff(slat)
         let jmag = zip(jlon, jlat).map { ($0 * $0 + $1 * $1).squareRoot() }
 
-        // 1. 酔いやすさ
+        // 1. 酔いやすさ(手持ちで外した区間は GPS の速度の変化で埋めてあるので、走行中は全部使う)
         let blon = bandpass(lon), blat = bandpass(lat)
         var energy = 0.0
         for i in 0..<n where moving[i] { energy += blon[i] * blon[i] + blat[i] * blat[i] }
@@ -521,11 +582,11 @@ enum DriveEval {
         let sick = tMoving > 0 ? (energy / tMoving).squareRoot() : 0
 
         // 2. 躍度
-        let jerk = pct((0..<n).filter { moving[$0] }.map { jmag[$0] }, 0.95) ?? 0
+        let jerk = pct((0..<n).filter { use[$0] }.map { jmag[$0] }, 0.95) ?? 0
 
         // 3. 急な操作
         var spans: [(start: Int, end: Int)] = []
-        for i in 0..<n {
+        for i in 0..<n where ok[i] {
             let aLon = slon[i] / G0, aLat = slat[i] / G0
             let hit = abs(aLon) > harshG || abs(aLat) > harshG ||
                 (moving[i] && jmag[i] > harshJerk && max(abs(aLon), abs(aLat)) > harshJerkG)
@@ -551,14 +612,14 @@ enum DriveEval {
                 harshEvents.append(event("急な操作", rows, t0Unix, e.start, e.end, kJ, jmag[kJ], "m/s3"))
             }
         }
-        let harsh = tMoving > 0 ? Double(harshEvents.count) / (tMoving / 600) : 0
+        let harsh = tUse > 0 ? Double(harshEvents.count) / (tUse / 600) : 0
 
         // 4. 止まり際
         var stopVals: [Double] = [], stopEvents: [EvalEvent] = []
         if n > 1 {
             for i in 1..<n where rows[i].stopped && !rows[i - 1].stopped {
                 let lo = max(0, i - HZ), hi = min(n, i + HZ / 2)
-                if lo >= hi { continue }
+                if lo >= hi || ok[lo..<hi].contains(false) { continue }
                 let k = argmax(lo..<hi) { abs(jlon[$0]) }
                 let v = abs(jlon[k])
                 stopVals.append(v)
@@ -568,7 +629,7 @@ enum DriveEval {
         let stop = stopVals.isEmpty ? 0 : stopVals.reduce(0, +) / Double(stopVals.count)
 
         // 5. カーブのつなぎ
-        let curve = pct((0..<n).filter { moving[$0] && abs(slat[$0]) / G0 > curveG }.map { jmag[$0] }, 0.95) ?? 0
+        let curve = pct((0..<n).filter { use[$0] && abs(slat[$0]) / G0 > curveG }.map { jmag[$0] }, 0.95) ?? 0
 
         let values = ["sick": sick, "jerk": jerk, "harsh": harsh, "stop": stop, "curve": curve]
         var out: [EvalItem] = []

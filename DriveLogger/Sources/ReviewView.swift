@@ -67,7 +67,7 @@ struct ReviewView: View {
     @State private var byDistance = false
 
     private var events: [EvalEvent] {
-        meta.travelMode.isCar ? (store.evaluation(meta.id)?.events ?? []) : []
+        meta.travelMode.hasDriveEval ? (store.evaluation(meta.id)?.events ?? []) : []
     }
 
     var body: some View {
@@ -114,10 +114,11 @@ struct ReviewView: View {
     private func load(force: Bool = false) async {
         guard data == nil || force else { return }
         let folder = store.dir(meta.id)
-        let motion = meta.travelMode.isCar
+        let motion = meta.travelMode.hasDriveEval
+        let handheld = meta.travelMode == .ride
         let pressure = meta.travelMode != .plane
         let result: Result<ReviewData, Error> = await Task.detached(priority: .userInitiated) {
-            Result { try ReviewLoader.load(folder: folder, motion: motion, pressure: pressure) }
+            Result { try ReviewLoader.load(folder: folder, motion: motion, pressure: pressure, handheld: handheld) }
         }.value
         switch result {
         case .success(let d):
@@ -143,7 +144,7 @@ struct ReviewView: View {
             .layoutPriority(1)
 
             VStack(alignment: .leading, spacing: 6) {
-                if meta.travelMode.isCar, let eval = store.evaluation(meta.id) {
+                if meta.travelMode.hasDriveEval, let eval = store.evaluation(meta.id) {
                     ScoreStrip(eval: eval)
                 }
                 readout(d)

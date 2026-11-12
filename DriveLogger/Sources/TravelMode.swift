@@ -1,9 +1,9 @@
 import CoreLocation
 
-/// 移動手段。車以外は国道制覇マップに送らず(GPX を /api/inbox に送らない)、運転評価もしない。
+/// 移動手段。車以外は国道制覇マップに送らない(GPX を /api/inbox に送らない)。運転評価は車と同乗だけ。
 /// 生データは地図サーバーの trips フォルダ(_drivelog\trips\<走行ID>)に送る
 enum TravelMode: String, Codable, CaseIterable, Identifiable {
-    /// ride は同乗(バス・タクシー・人の運転する車)。自分が運転していないので地図には入れない
+    /// ride は同乗(バス・タクシー・人の運転する車)。自分が運転していないので地図には入れないが、運転評価はする
     case car, ride, train, plane, other
 
     var id: String { rawValue }
@@ -29,6 +29,12 @@ enum TravelMode: String, Codable, CaseIterable, Identifiable {
     }
 
     var isCar: Bool { self == .car }
+
+    /// 運転評価を出すか。同乗(人の運転)も評価する。端末は固定でも手持ちでもよい(手持ちは参考値)
+    var hasDriveEval: Bool { self == .car || self == .ride }
+
+    /// 運転評価の計算で、固定されていない端末(手持ち)を許すか
+    var allowsHandheldEval: Bool { self == .ride }
 
     /// 位置の取り方(iOS が移動の種類に合わせて測位を調整する)
     var activityType: CLActivityType {

@@ -137,7 +137,8 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
             id: id, start: now, end: nil,
             device: Recorder.deviceModel(), systemVersion: UIDevice.current.systemVersion,
             appVersion: "\(info?["CFBundleShortVersionString"] ?? "?") (\(info?["CFBundleVersion"] ?? "?"))",
-            motionHz: mode.isCar ? AppSettings.shared.motionHz : TravelMode.tripMotionHz, uptimeToUnix: uptimeToUnix)
+            // 同乗も運転評価をするので、加速度は車と同じ頻度で取る
+            motionHz: mode.hasDriveEval ? AppSettings.shared.motionHz : TravelMode.tripMotionHz, uptimeToUnix: uptimeToUnix)
         m.points = 0
         m.mode = mode
 
@@ -238,13 +239,15 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
         current = nil
         coach = nil
-        // 車以外は音を鳴らさず、運転評価もしない
-        guard mode.isCar else {
+        // 車以外は音を鳴らさない。運転評価は車と同乗だけ
+        if !mode.isCar {
             lastTrip = finishedID.flatMap { LogStore.shared.load($0) }
+        }
+        guard mode.hasDriveEval else {
             if AppSettings.shared.autoUpload { Uploader.shared.uploadPending() }
             return
         }
-        if Beeper.shared.play(.stop) == nil { showNotice("記録を止めました") }
+        if mode.isCar, Beeper.shared.play(.stop) == nil { showNotice("記録を止めました") }
         // 運転評価を計算してから送る(evaluation.json も一緒に送り、地図ですぐ見られるようにする)
         guard let id = finishedID else {
             if AppSettings.shared.autoUpload { Uploader.shared.uploadPending() }
