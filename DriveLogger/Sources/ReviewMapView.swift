@@ -90,7 +90,16 @@ struct ReviewMapView: UIViewRepresentable {
                     map.setCenter(coord, animated: true)
                 }
             }
+        } else if cursor != c.followed, let i = cursor, samples.indices.contains(i) {
+            // グラフをなぞって丸が地図の外(端の近く)へ出たら、拡大はそのままで丸を中心に戻す。
+            // 丸が動いたときだけ見るので、地図を手で動かしてよそを見ているあいだは戻さない
+            let coord = CLLocationCoordinate2D(latitude: samples[i].lat, longitude: samples[i].lon)
+            let inner = map.bounds.insetBy(dx: min(28, map.bounds.width / 4), dy: min(28, map.bounds.height / 4))
+            if !inner.isEmpty, !inner.contains(map.convert(coord, toPointTo: map)) {
+                map.setCenter(coord, animated: true)
+            }
         }
+        c.followed = cursor
     }
 
     private func applyStyle(_ map: MKMapView, _ c: Coordinator) {
@@ -172,6 +181,8 @@ struct ReviewMapView: UIViewRepresentable {
         var dot: CursorAnnotation?
         var drawnCount = -1
         var focused: Int?
+        /// 追尾を確かめた最後の点(丸が動いたときだけ追尾する)
+        var followed: Int?
         let zoom = OneFingerZoom()
 
         init(parent: ReviewMapView) { self.parent = parent }

@@ -33,12 +33,22 @@ jobs:
       - name: Xcode プロジェクトを作る
         run: xcodegen generate
       - name: ビルド
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
+          # 設定画面に出すプルリクエストの番号。main のビルドは、最後のコミットの題名
+          # (「Merge pull request #19 …」か、まとめてマージしたときの「…(#19)」)から取る
+          PR="$PR_NUMBER"
+          if [ -z "$PR" ]; then
+            PR=$(git log -1 --pretty=%s | sed -nE 's/^Merge pull request #([0-9]+) .*/\1/p; s/.*\(#([0-9]+)\)$/\1/p' | head -1)
+          fi
+          echo "プルリクエスト: #${PR:-なし}"
           xcodebuild -quiet -project DriveLogger.xcodeproj -scheme DriveLogger \
             -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             CURRENT_PROJECT_VERSION=${{ github.run_number }} GIT_COMMIT=${GITHUB_SHA::7} \
+            GIT_PR="$PR" GIT_EVENT=${{ github.event_name }} \
             build
       - name: IPA にまとめる
         run: |

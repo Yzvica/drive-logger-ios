@@ -22,6 +22,9 @@ targets:
         CFBundleDisplayName: 走行ロガー
         # CI がビルドしたコミット(設定画面のバージョンに出す)
         GitCommit: $(GIT_COMMIT)
+        # ビルドのもとになったプルリクエストの番号と、ビルドのきっかけ(push / pull_request)
+        GitPR: $(GIT_PR)
+        GitEvent: $(GIT_EVENT)
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
