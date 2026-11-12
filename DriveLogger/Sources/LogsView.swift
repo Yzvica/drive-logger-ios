@@ -161,6 +161,8 @@ struct SessionRow: View {
             Text("記録中").font(.caption.bold()).foregroundStyle(.red)
         } else if LogStore.allSent(meta) {
             Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+        } else if meta.modeChangePending == true {
+            Text("手段の変更を未送信").font(.caption).foregroundStyle(.orange)
         } else if meta.gpxSent {
             Text("生データ未送信").font(.caption).foregroundStyle(.orange)
         } else {
@@ -172,6 +174,11 @@ struct SessionRow: View {
 struct LogDetailView: View {
     let id: String
     @EnvironmentObject var store: LogStore
+    @EnvironmentObject var uploader: Uploader
+    @EnvironmentObject var recorder: Recorder
+    /// 選び直した移動手段(確かめるまで)
+    @State private var askMode: TravelMode?
+    @State private var changingMode = false
 
     var body: some View {
         let meta = store.sessions.first { $0.id == id }
@@ -186,9 +193,23 @@ struct LogDetailView: View {
                         }
                     }
                 }
-                Section("概要") {
-                    LabeledContent("移動手段") {
-                        Label(meta.travelMode.title, systemImage: meta.travelMode.systemImage)
+                Section {
+                    if meta.finished {
+                        Picker(selection: Binding(get: { meta.travelMode }, set: { if $0 != meta.travelMode { askMode = $0 } })) {
+                            ForEach(TravelMode.allCases) { m in
+                                Label(m.title, systemImage: m.systemImage).tag(m)
+                            }
+                        } label: {
+                            HStack {
+                                Text("移動手段")
+                                if changingMode { ProgressView() }
+                            }
+                        }
+                        .disabled(changingMode || uploader.isUploading || recorder.isRecording)
+                    } else {
+                        LabeledContent("移動手段") {
+                            Label(meta.travelMode.title, systemImage: meta.travelMode.systemImage)
+                        }
                     }
                     LabeledContent("開始", value: Display.date.string(from: meta.start))
                     LabeledContent("距離", value: Display.km(meta.distanceM))
@@ -199,6 +220,14 @@ struct LogDetailView: View {
                     }
                     LabeledContent("位置の点数", value: "\(meta.points)")
                     LabeledContent("端末", value: "\(meta.device) / iOS \(meta.systemVersion)")
+                } header: {
+                    Text("概要")
+                } footer: {
+                    if meta.modeChangePending == true {
+                        Text("移動手段を直しました。次に送るときに地図サーバーにも伝えます(車にすると国道の制覇に入り、車以外にすると制覇から外れます)")
+                    } else if meta.finished {
+                        Text("移動手段を間違えていたら、ここで選び直せます")
+                    }
                 }
                 if meta.finished && meta.travelMode != .plane {
                     WeatherSection(meta: meta)
@@ -233,6 +262,45 @@ struct LogDetailView: View {
             }
         }
         .navigationTitle(id)
+        .confirmationDialog(askMode.map { "移動手段を「\($0.title)」に直しますか?" } ?? "", isPresented: Binding(get: { askMode != nil }, set: { if !$0 { askMode = nil } }), titleVisibility: .visible) {
+            if let mode = askMode {
+                Button("「\(mode.title)」に直す") { change(to: mode) }
+            }
+            Button("やめる", role: .cancel) { askMode = nil }
+        } message: {
+            if let mode = askMode, let meta = store.sessions.first(where: { $0.id == id }) {
+                Text(modeChangeNote(from: meta, to: mode))
+            }
+        }
+        // 地図のログタブで直されていたら、こちらも合わせる
+        .task(id: id) {
+            guard let meta = store.sessions.first(where: { $0.id == id }), meta.finished,
+                  let mode = await uploader.fetchServerMode(meta), mode != meta.travelMode else { return }
+            store.applyServerMode(id, mode: mode)
+        }
+    }
+
+    private func modeChangeNote(from meta: SessionMeta, to mode: TravelMode) -> String {
+        var lines: [String] = []
+        let sent = meta.gpxSent || !meta.rawSent.isEmpty
+        if mode.isCar && !meta.travelMode.isCar {
+            lines.append(sent ? "地図サーバーで国道の制覇に入れます。" : "送るときに国道の制覇に入れます。")
+        } else if !mode.isCar && meta.travelMode.isCar {
+            lines.append(sent ? "地図サーバーで国道の制覇から外し、判定し直します。" : "地図には送らなくなります。")
+        }
+        if mode.hasDriveEval { lines.append("運転評価を計算し直します。") }
+        if sent { lines.append("次に送るとき(Wi-Fi など)にサーバーにも伝えます。") }
+        return lines.joined(separator: "\n")
+    }
+
+    private func change(to mode: TravelMode) {
+        askMode = nil
+        changingMode = true
+        store.changeMode(id, to: mode) {
+            changingMode = false
+            // 送れる通信なら、すぐ地図サーバーにも伝える
+            if AppSettings.shared.autoUpload && uploader.canAutoSend { uploader.uploadPending() }
+        }
     }
 
     private func size(_ url: URL) -> String {

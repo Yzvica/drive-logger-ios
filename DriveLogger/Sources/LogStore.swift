@@ -33,6 +33,8 @@ struct SessionMeta: Codable, Identifiable, Hashable {
     var mode: TravelMode?
     /// GPS の高度の最高値(m)
     var maxAltitudeM: Double?
+    /// 記録したあとに移動手段を直し、地図サーバーにまだ伝えていなければ true(次に送るときに POST /api/rawlog/mode で伝える)
+    var modeChangePending: Bool?
 
     var travelMode: TravelMode { mode ?? .car }
 
@@ -240,6 +242,45 @@ final class LogStore: ObservableObject {
     }
 
     static func allSent(_ meta: SessionMeta) -> Bool {
-        (meta.gpxSent || !meta.travelMode.isCar) && rawFiles.allSatisfy(meta.rawSent.contains)
+        (meta.gpxSent || !meta.travelMode.isCar) && rawFiles.allSatisfy(meta.rawSent.contains) && meta.modeChangePending != true
+    }
+
+    // MARK: - 移動手段を直す
+
+    /// 記録したあとで移動手段を直す(電車を車で記録してしまったときなど)。
+    /// 地図サーバーに何か送ってあれば、次に送るときにサーバー側も直す(フォルダの移動・国道の判定への出し入れはサーバーが行う)。
+    /// 運転評価のある手段(車・同乗)にしたら評価を計算し直し、送り直す。終わったらメインスレッドで done を呼ぶ
+    func changeMode(_ id: String, to mode: TravelMode, done: @escaping () -> Void) {
+        guard var meta = load(id), meta.finished, meta.travelMode != mode else { done(); return }
+        meta.mode = mode
+        if meta.gpxSent || !meta.rawSent.isEmpty { meta.modeChangePending = true }
+        let reEval = mode.hasDriveEval
+        if reEval {
+            // 車と同乗で評価の方法(手持ちを許すか)が違うので、前の評価は捨てる
+            evalCache[id] = nil
+            evalMissing.remove(id)
+            try? FileManager.default.removeItem(at: dir(id).appendingPathComponent("evaluation.json"))
+        }
+        save(meta)
+        guard reEval else { done(); return }
+        evaluate(id) { _ in
+            // 計算し直した評価も地図サーバーに送る
+            if var m = self.load(id) {
+                m.rawSent.removeAll { $0 == "evaluation.json" }
+                self.save(m)
+            }
+            done()
+        }
+    }
+
+    /// 地図サーバーで直された移動手段に合わせる(地図のログタブで直したとき)。サーバー側は直し終えているので、送り直さない
+    func applyServerMode(_ id: String, mode: TravelMode) {
+        guard var meta = load(id), meta.travelMode != mode, meta.modeChangePending != true else { return }
+        meta.mode = mode
+        // 車にしたときはサーバーが国道の判定に入れている
+        if mode.isCar { meta.gpxSent = true }
+        evalCache[id] = nil
+        evalMissing.remove(id)
+        save(meta)
     }
 }
