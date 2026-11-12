@@ -123,6 +123,21 @@ final class Uploader: ObservableObject {
         var meta = original
         let dir = LogStore.shared.dir(meta.id)
 
+        // 送ったあとで移動手段を直した走行は、先に地図サーバーでも直してもらう(フォルダを移し、国道の判定に足す・外す)
+        if meta.modeChangePending == true {
+            switch try await postMode(meta, base: base) {
+            case .changed(let gpx):
+                // 車にしたとき、サーバーに位置の記録があれば GPX はサーバーが作る。なければこのあと送る
+                meta.gpxSent = gpx
+            case .noSession:
+                // サーバーに何も残っていない: 新しい手段で最初から送る
+                meta.gpxSent = false
+                meta.rawSent = []
+            }
+            meta.modeChangePending = nil
+            LogStore.shared.save(meta)
+        }
+
         let isCar = meta.travelMode.isCar
         if isCar && !meta.gpxSent {
             var c = URLComponents(url: base.appendingPathComponent("api/inbox"), resolvingAgainstBaseURL: false)!
@@ -188,6 +203,41 @@ final class Uploader: ObservableObject {
         let data = result.0
         let file = LogStore.shared.dir(meta.id).appendingPathComponent(name)
         return (try? data.write(to: file, options: .atomic)) != nil
+    }
+
+    enum ModeResult { case changed(gpx: Bool), noSession }
+
+    /// POST /api/rawlog/mode?session=&mode= で地図サーバーの移動手段を直す
+    private func postMode(_ meta: SessionMeta, base: URL) async throws -> ModeResult {
+        var c = URLComponents(url: base.appendingPathComponent("api/rawlog/mode"), resolvingAgainstBaseURL: false)!
+        c.queryItems = [URLQueryItem(name: "session", value: meta.id), URLQueryItem(name: "mode", value: meta.travelMode.rawValue)]
+        var req = URLRequest(url: c.url!)
+        req.httpMethod = "POST"
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else { throw UploadError.badResponse("応答がありません") }
+        let body = String(data: data, encoding: .utf8) ?? ""
+        if http.statusCode == 404 {
+            // 古い地図サーバーは移動手段を直せない(どの道も 404 を返す)。サーバーを更新してから送り直す
+            guard body.contains("no session") else { throw UploadError.badResponse("地図サーバーが古いので移動手段を直せません(更新してください)") }
+            return .noSession
+        }
+        guard (200..<300).contains(http.statusCode) else { throw UploadError.badResponse("HTTP \(http.statusCode) \(body.prefix(200))") }
+        struct Reply: Decodable { var gpx: Bool }
+        let gpx = (try? JSONDecoder().decode(Reply.self, from: data))?.gpx ?? false
+        return .changed(gpx: gpx)
+    }
+
+    /// 地図サーバーでの移動手段(地図のログタブで直されていないか確かめる)。つながらない・まだ届いていなければ nil
+    func fetchServerMode(_ meta: SessionMeta) async -> TravelMode? {
+        guard online, let base = AppSettings.shared.baseURL, meta.rawSent.contains("meta.json"), meta.modeChangePending != true else { return nil }
+        var c = URLComponents(url: base.appendingPathComponent("api/rawlog/mode"), resolvingAgainstBaseURL: false)!
+        c.queryItems = [URLQueryItem(name: "session", value: meta.id)]
+        var req = URLRequest(url: c.url!)
+        req.timeoutInterval = 5
+        guard let result = try? await session.data(for: req), (result.1 as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        struct Reply: Decodable { var mode: String; var sent: Bool? }
+        guard let r = try? JSONDecoder().decode(Reply.self, from: result.0), r.sent != false else { return nil }
+        return TravelMode(rawValue: r.mode)
     }
 
     private func send(file: URL, to url: URL, method: String) async throws {
