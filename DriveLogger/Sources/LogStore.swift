@@ -332,6 +332,8 @@ final class LogStore: ObservableObject {
         guard var meta = load(id), meta.finished, meta.travelMode != mode else { done(); return }
         meta.mode = mode
         if meta.gpxSent || !meta.rawSent.isEmpty { meta.modeChangePending = true }
+        // サーバーは手段に合わせて補い直す(車・同乗は道路、電車は線路、ほかは補わない)ので、前に受け取った位置は捨てる
+        try? FileManager.default.removeItem(at: dir(id).appendingPathComponent(ReviewLoader.filledFile))
         let reEval = mode.hasDriveEval
         if reEval {
             // 車と同乗で評価の方法(手持ちを許すか)が違うので、前の評価は捨てる
@@ -357,6 +359,7 @@ final class LogStore: ObservableObject {
         meta.mode = mode
         // 車にしたときはサーバーが国道の判定に入れている
         if mode.isCar { meta.gpxSent = true }
+        try? FileManager.default.removeItem(at: dir(id).appendingPathComponent(ReviewLoader.filledFile))
         evalCache[id] = nil
         evalMissing.remove(id)
         save(meta)
