@@ -184,10 +184,24 @@ final class Uploader: ObservableObject {
         }
     }
 
-    /// 地図サーバーが、トンネルなどで GPS が途切れた区間を道路に沿って補った位置(location_filled.csv)を受け取り、
-    /// 走行フォルダに保存する。まだ補っていない・つながらないときは false(次に振り返りを開いたときにまた試す)
+    /// 地図サーバーが、トンネルなどで GPS が途切れた区間を道路(電車は線路)に沿って補った位置(location_filled.csv)を受け取り、
+    /// 走行フォルダに保存する。サーバーはあとから補い直すこと(線路のデータが入った・補い方が良くなった・移動手段を直した)が
+    /// あるので、振り返りを開くたびに取り直す。端末のものと中身が変わったら true(読み直す)。
+    /// サーバーで補った位置がなくなっていたら(補えなかった手段に直したなど)、端末のものも消す
     func fetchFilled(_ meta: SessionMeta) async -> Bool {
-        await fetchServerFile(meta, name: ReviewLoader.filledFile)
+        // 手段の直し・分けた記録の送り直しがまだなら、サーバーの置き場所(車/trips)が端末と違うので取らない
+        guard meta.modeChangePending != true, meta.resetPending != true else { return false }
+        let file = LogStore.shared.dir(meta.id).appendingPathComponent(ReviewLoader.filledFile)
+        switch await getServerFile(meta, name: ReviewLoader.filledFile) {
+        case .data(let data):
+            if let old = try? Data(contentsOf: file), old == data { return false }
+            return (try? data.write(to: file, options: .atomic)) != nil
+        case .notFound:
+            guard FileManager.default.fileExists(atPath: file.path) else { return false }
+            return (try? FileManager.default.removeItem(at: file)) != nil
+        case .unreachable:
+            return false
+        }
     }
 
     /// 地図サーバーが走り終えたあとに取った天気(weather.json)を受け取り、走行フォルダに保存する。
@@ -198,18 +212,29 @@ final class Uploader: ObservableObject {
 
     /// 地図サーバーが走行フォルダに作ったファイルを GET /api/rawlog で受け取り、端末の走行フォルダに保存する
     private func fetchServerFile(_ meta: SessionMeta, name: String) async -> Bool {
-        guard online, let base = AppSettings.shared.baseURL, meta.rawSent.contains("meta.json") else { return false }
+        guard case .data(let data) = await getServerFile(meta, name: name) else { return false }
+        let file = LogStore.shared.dir(meta.id).appendingPathComponent(name)
+        return (try? data.write(to: file, options: .atomic)) != nil
+    }
+
+    enum ServerFile { case data(Data), notFound, unreachable }
+
+    /// 地図サーバーが走行フォルダに作ったファイルを GET /api/rawlog で受け取る(保存はしない)
+    private func getServerFile(_ meta: SessionMeta, name: String) async -> ServerFile {
+        guard online, let base = AppSettings.shared.baseURL, meta.rawSent.contains("meta.json") else { return .unreachable }
         var c = URLComponents(url: base.appendingPathComponent("api/rawlog"), resolvingAgainstBaseURL: false)!
         c.queryItems = [URLQueryItem(name: "session", value: meta.id), URLQueryItem(name: "file", value: name)]
         if !meta.travelMode.isCar { c.queryItems?.append(URLQueryItem(name: "kind", value: "trip")) }
         var req = URLRequest(url: c.url!)
         // 自宅の外(サーバーに届かない所)で待たされないよう短めにする
         req.timeoutInterval = 5
-        guard let result = try? await session.data(for: req),
-              (result.1 as? HTTPURLResponse)?.statusCode == 200, !result.0.isEmpty else { return false }
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        guard let result = try? await session.data(for: req), let http = result.1 as? HTTPURLResponse else { return .unreachable }
         let data = result.0
-        let file = LogStore.shared.dir(meta.id).appendingPathComponent(name)
-        return (try? data.write(to: file, options: .atomic)) != nil
+        // 404 はサーバーの走行フォルダにそのファイルがない(まだ作っていない・作らない手段)
+        if http.statusCode == 404 { return .notFound }
+        guard http.statusCode == 200, !data.isEmpty else { return .unreachable }
+        return .data(data)
     }
 
     enum ModeResult { case changed(gpx: Bool), noSession }

@@ -116,10 +116,9 @@ struct ReviewView: View {
         }
         .task {
             await load()
-            // 地図サーバーがトンネルの区間を補っていれば受け取り、読み直す
-            let folder = store.dir(meta.id)
-            if !FileManager.default.fileExists(atPath: folder.appendingPathComponent(ReviewLoader.filledFile).path),
-               await Uploader.shared.fetchFilled(meta) {
+            // 地図サーバーがトンネル(電車は線路)の区間を補っていれば受け取り、変わっていたら読み直す。
+            // サーバーはあとから補い直すことがあるので、開くたびに確かめる
+            if await Uploader.shared.fetchFilled(meta) {
                 await load(force: true)
             }
         }
