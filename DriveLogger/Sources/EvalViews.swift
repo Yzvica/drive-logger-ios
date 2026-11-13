@@ -206,7 +206,7 @@ struct CoachPanel: View {
     }
 }
 
-/// G の点。上が減速、下が加速、左右は体が押される向き。内側の円が 0.15G、外側が 0.3G(これを超えると急な操作)
+/// G の点。上が減速、下が加速、左右は体が押される向き。内側の円が 0.15G、外側が急な操作の境目(DriveEval.harshG)
 struct GDot: View {
     let lonG: Double
     let latG: Double
@@ -224,7 +224,7 @@ struct GDot: View {
             ZStack {
                 Circle().stroke(.quaternary, lineWidth: 1)
                 Circle().stroke(Color.orange.opacity(0.6), lineWidth: 1.5)
-                    .frame(width: r * 2 * 0.3 / GDot.fullG, height: r * 2 * 0.3 / GDot.fullG)
+                    .frame(width: r * 2 * DriveEval.harshG / GDot.fullG, height: r * 2 * DriveEval.harshG / GDot.fullG)
                 Circle().stroke(Color.green.opacity(0.6), lineWidth: 1.5)
                     .frame(width: r * 2 * 0.15 / GDot.fullG, height: r * 2 * 0.15 / GDot.fullG)
                 Path { path in
@@ -233,7 +233,7 @@ struct GDot: View {
                 }
                 .stroke(.quaternary, lineWidth: 0.5)
                 if ready {
-                    Circle().fill(mag >= 0.3 ? Color.red : mag >= 0.15 ? Color.yellow : Color.green)
+                    Circle().fill(mag >= DriveEval.harshG ? Color.red : mag >= 0.15 ? Color.yellow : Color.green)
                         .frame(width: 16, height: 16)
                         .position(p)
                         .animation(.linear(duration: 0.2), value: lonG)

@@ -39,7 +39,7 @@ struct EvalEvent: Codable, Hashable {
 
 /// evaluation.json と同じ形
 struct Evaluation: Codable, Hashable {
-    var version: Int = 1
+    var version: Int = 2
     var score: Double
     var items: [EvalItem]
     var movingS: Double
@@ -79,7 +79,7 @@ enum DriveEval {
 
     // 項目: (キー, 名前, 100点の値, 0点の値, 重み)。値が小さいほど良い
     static let items: [(key: String, name: String, good: Double, bad: Double, weight: Double)] = [
-        ("sick", "酔いやすさ", 0.15, 0.6, 0.30),      // m/s^2(走行中の 0.1〜0.5Hz の揺れの実効値)
+        ("sick", "酔いやすさ", 0.15, 0.8, 0.30),      // m/s^2(走行中の 0.1〜0.5Hz の揺れの実効値)
         ("jerk", "躍度", 1.0, 4.0, 0.20),             // m/s^3(走行中の上位5%)
         ("harsh", "急な操作", 0.0, 5.0, 0.20),        // 回 / 10分
         ("stop", "止まり際", 0.5, 4.0, 0.15),         // m/s^3(停止直前1秒の躍度の最大、停止ごとの平均)
@@ -87,7 +87,7 @@ enum DriveEval {
     ]
 
     static let movingKmh = 5.0
-    static let harshG = 0.3
+    static let harshG = 0.35
     static let harshJerk = 4.0
     static let harshJerkG = 0.15
     static let jerkSmoothS = 1.0
