@@ -58,6 +58,11 @@ struct ReviewView: View {
     let meta: SessionMeta
     @EnvironmentObject var store: LogStore
     @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var uploader: Uploader
+    @EnvironmentObject var recorder: Recorder
+    @Environment(\.dismiss) private var dismiss
+    /// 分ける時刻(「ここで分ける」を押したとき)
+    @State private var splitAt: Date?
 
     @State private var data: ReviewData?
     @State private var failed: String?
@@ -85,6 +90,15 @@ struct ReviewView: View {
         }
         .navigationTitle("振り返り")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: Binding(get: { splitAt != nil }, set: { if !$0 { splitAt = nil } })) {
+            if let at = splitAt {
+                SplitSheet(meta: meta, at: at) {
+                    splitAt = nil
+                    // 分けたら、前半だけになったログの詳細に戻る
+                    dismiss()
+                }
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
@@ -183,6 +197,15 @@ struct ReviewView: View {
                 if let g = s.lonG { Text(String(format: "前後%+.2f", g)) }
                 if let g = s.latG { Text(String(format: "横%+.2f", g)) }
                 Spacer(minLength: 0)
+                if meta.finished && i > 0 && i < d.samples.count - 1 {
+                    Button {
+                        splitAt = Date(timeIntervalSince1970: s.unix)
+                    } label: {
+                        Label("ここで分ける", systemImage: "scissors").labelStyle(.iconOnly)
+                    }
+                    .disabled(uploader.isUploading || recorder.isRecording)
+                    .accessibilityLabel("ここで記録を分ける")
+                }
                 Button {
                     cursor = nil
                 } label: {
@@ -349,6 +372,90 @@ struct ReviewChart: View {
                 .font(.caption2).monospacedDigit()
                 .padding(.leading, 28)
                 .allowsHitTesting(false)
+        }
+    }
+}
+
+/// 記録を分ける確認(前半と後半の移動手段を選ぶ)
+struct SplitSheet: View {
+    let meta: SessionMeta
+    let at: Date
+    let onDone: () -> Void
+    @EnvironmentObject var store: LogStore
+    @EnvironmentObject var uploader: Uploader
+    @Environment(\.dismiss) private var dismiss
+    @State private var modeA: TravelMode
+    @State private var modeB: TravelMode
+    @State private var working = false
+    @State private var error: String?
+
+    init(meta: SessionMeta, at: Date, onDone: @escaping () -> Void) {
+        self.meta = meta
+        self.at = at
+        self.onDone = onDone
+        _modeA = State(initialValue: meta.travelMode)
+        // 後半ははじめ「その他」(歩いた、など)。違えば選び直す
+        _modeB = State(initialValue: meta.travelMode == .other ? .car : .other)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Picker("移動手段", selection: $modeA) {
+                        ForEach(TravelMode.allCases) { Label($0.title, systemImage: $0.systemImage).tag($0) }
+                    }
+                } header: {
+                    Text("前半 \(Display.time.string(from: meta.start))〜\(Display.time.string(from: at))")
+                }
+                Section {
+                    Picker("移動手段", selection: $modeB) {
+                        ForEach(TravelMode.allCases) { Label($0.title, systemImage: $0.systemImage).tag($0) }
+                    }
+                } header: {
+                    Text("後半 \(Display.time.string(from: at))〜\(meta.end.map { Display.time.string(from: $0) } ?? "")")
+                } footer: {
+                    Text("後半は \(Fmt.sessionID.string(from: at)) の別の記録になります。運転評価は前半・後半それぞれで計算し直します。"
+                         + (meta.gpxSent || !meta.rawSent.isEmpty ? "地図サーバーに送ってある記録は、次に送るときに分けたものに置き換えます(車の部分だけが国道の制覇に入ります)。" : ""))
+                }
+                if let error {
+                    Section { Text(error).foregroundStyle(.red) }
+                }
+                Section {
+                    Button {
+                        split()
+                    } label: {
+                        HStack {
+                            Text("ここで分ける")
+                            if working { Spacer(); ProgressView() }
+                        }
+                    }
+                    .disabled(working)
+                }
+            }
+            .navigationTitle("記録を分ける")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("やめる") { dismiss() }.disabled(working)
+                }
+            }
+        }
+        .interactiveDismissDisabled(working)
+    }
+
+    private func split() {
+        working = true
+        error = nil
+        store.split(meta.id, at: at, modeA: modeA, modeB: modeB) { result in
+            working = false
+            switch result {
+            case .success:
+                if AppSettings.shared.autoUpload && uploader.canAutoSend { uploader.uploadPending() }
+                onDone()
+            case .failure(let e):
+                error = e.localizedDescription
+            }
         }
     }
 }

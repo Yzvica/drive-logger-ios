@@ -123,6 +123,13 @@ final class Uploader: ObservableObject {
         var meta = original
         let dir = LogStore.shared.dir(meta.id)
 
+        // 途中で分けた記録の前半は、地図サーバーにある前の記録(分ける前の全体)を消してから送り直す
+        if meta.resetPending == true {
+            try await deleteSession(meta, base: base)
+            meta.resetPending = nil
+            LogStore.shared.save(meta)
+        }
+
         // 送ったあとで移動手段を直した走行は、先に地図サーバーでも直してもらう(フォルダを移し、国道の判定に足す・外す)
         if meta.modeChangePending == true {
             switch try await postMode(meta, base: base) {
@@ -227,9 +234,27 @@ final class Uploader: ObservableObject {
         return .changed(gpx: gpx)
     }
 
+    /// DELETE /api/rawlog/session?session= で地図サーバーにある記録を忘れてもらう(フォルダは replaced に移り、地図のログは判定から外れる)
+    private func deleteSession(_ meta: SessionMeta, base: URL) async throws {
+        var c = URLComponents(url: base.appendingPathComponent("api/rawlog/session"), resolvingAgainstBaseURL: false)!
+        c.queryItems = [URLQueryItem(name: "session", value: meta.id)]
+        var req = URLRequest(url: c.url!)
+        req.httpMethod = "DELETE"
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else { throw UploadError.badResponse("応答がありません") }
+        let body = String(data: data, encoding: .utf8) ?? ""
+        if http.statusCode == 404 {
+            // サーバーに何もなければそのまま送る。古いサーバーは(どの道も)404 を返すので止める
+            guard body.contains("no session") else { throw UploadError.badResponse("地図サーバーが古いので分けた記録を送れません(更新してください)") }
+            return
+        }
+        guard (200..<300).contains(http.statusCode) else { throw UploadError.badResponse("HTTP \(http.statusCode) \(body.prefix(200))") }
+    }
+
     /// 地図サーバーでの移動手段(地図のログタブで直されていないか確かめる)。つながらない・まだ届いていなければ nil
     func fetchServerMode(_ meta: SessionMeta) async -> TravelMode? {
-        guard online, let base = AppSettings.shared.baseURL, meta.rawSent.contains("meta.json"), meta.modeChangePending != true else { return nil }
+        guard online, let base = AppSettings.shared.baseURL, meta.rawSent.contains("meta.json"),
+              meta.modeChangePending != true, meta.resetPending != true else { return nil }
         var c = URLComponents(url: base.appendingPathComponent("api/rawlog/mode"), resolvingAgainstBaseURL: false)!
         c.queryItems = [URLQueryItem(name: "session", value: meta.id)]
         var req = URLRequest(url: c.url!)
