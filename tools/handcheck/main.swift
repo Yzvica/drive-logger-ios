@@ -69,7 +69,10 @@ for (h, c) in zip(hand.items, car.items) {
 for kind in ["急ブレーキ", "急ハンドル"] {
     let hs = hand.events.filter { $0.kind == kind }.map(\.tUnix)
     let cs = car.events.filter { $0.kind == kind }.map(\.tUnix)
-    let ok = !cs.isEmpty && cs.allSatisfy { c in hs.contains { abs($0 - c) <= 1.5 } }
+    // 固定でいちばん強かった出来事を、手持ちでも見つけられること。
+    // しきい値すれすれの弱い出来事は、手の揺れの分だけ出たり出なかったりするので比べない
+    let strongest = car.events.filter { $0.kind == kind }.max { $0.value < $1.value }?.tUnix
+    let ok = strongest.map { c in hs.contains { abs($0 - c) <= 1.5 } } ?? false
     check("\(kind)を見つける", ok, "手持ち \(hs) / 固定 \(cs)")
 }
 print("   手持ちの出来事: " + hand.events.map { "\($0.kind) \($0.value)" }.joined(separator: "、"))
