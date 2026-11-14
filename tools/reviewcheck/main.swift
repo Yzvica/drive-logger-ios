@@ -25,11 +25,14 @@ let maxKmh = s.map(\.kmh).max() ?? 0
 check("速度", maxKmh > 5 && maxKmh < 250, String(format: "最高 %.0f km/h", maxKmh))
 let maxG = s.compactMap { $0.lonG.map(abs) }.max() ?? 0
 check("前後G", maxG > 0.01 && maxG < 2, String(format: "最大 %.2f G", maxG))
+check("間引く前の 10 Hz の G がある(G円用)", car.fine.t.count > s.count && zip(car.fine.t, car.fine.t.dropFirst()).allSatisfy { $0 < $1 }, "\(car.fine.t.count) 点")
+let fineMid = car.fine.t[car.fine.t.count / 2]
+check("10 Hz の G を時刻で補える", car.fine.at(fineMid).map { abs($0.lonG - car.fine.lonG[car.fine.t.count / 2]) < 1e-9 } ?? false, String(format: "%.1f 秒", fineMid))
 check("時刻から点を探す", car.index(atT: s[s.count / 2].t) == s.count / 2, "\(s.count / 2)")
 check("距離から点を探す", car.index(atKm: 1e9) == s.count - 1 && car.index(atKm: -1) == 0, "端")
 
 let trip = try ReviewLoader.load(folder: folder, motion: false)
-check("車以外は加速度を使わない", !trip.hasMotion && trip.samples.allSatisfy { $0.lonG == nil }, "\(trip.samples.count) 点")
+check("車以外は加速度を使わない", !trip.hasMotion && trip.samples.allSatisfy { $0.lonG == nil } && trip.fine.isEmpty, "\(trip.samples.count) 点")
 
 // 飛行機: 機内は与圧されていて、GPS で 10,000 m 上っても気圧の高度は 2,000 m ほどしか変わらない
 let cabin = (0..<100).map { Double($0) * 20 }      // 0〜1,980 m
