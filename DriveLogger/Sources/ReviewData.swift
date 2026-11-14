@@ -209,3 +209,69 @@ enum ReviewLoader {
         return 2 * r * asin(min(1, a.squareRoot()))
     }
 }
+
+extension ReviewData {
+    /// 時刻(開始からの秒)の位置を、前後の点から線形に補う(再生中に丸をなめらかに動かすため)
+    func position(atT t: Double) -> (lat: Double, lon: Double)? {
+        guard let first = samples.first, let last = samples.last else { return nil }
+        if t <= first.t { return (first.lat, first.lon) }
+        if t >= last.t { return (last.lat, last.lon) }
+        let k = DriveEval.bisectLeft(samples.map(\.t), t)
+        let a = samples[max(0, k - 1)], b = samples[min(samples.count - 1, k)]
+        let r = b.t > a.t ? (t - a.t) / (b.t - a.t) : 0
+        return (a.lat + (b.lat - a.lat) * r, a.lon + (b.lon - a.lon) * r)
+    }
+
+    /// 時刻の進む向き(北から時計回りの度)。前後の位置が 5 m 以上離れていなければ(止まっている)nil
+    func bearing(atT t: Double) -> Double? {
+        for s in [3.0, 6.0, 12.0] {
+            guard let a = position(atT: t - s), let b = position(atT: t + s) else { return nil }
+            if ReviewLoader.distanceM(a.lat, a.lon, b.lat, b.lon) >= 5 {
+                let r = Double.pi / 180
+                let y = sin((b.lon - a.lon) * r) * cos(b.lat * r)
+                let x = cos(a.lat * r) * sin(b.lat * r) - sin(a.lat * r) * cos(b.lat * r) * cos((b.lon - a.lon) * r)
+                return (atan2(y, x) / r + 360).truncatingRemainder(dividingBy: 360)
+            }
+        }
+        return nil
+    }
+}
+
+/// 地図サーバーのリプレイ(地図の運転リプレイ)に渡す replay.csv。
+/// 評価と同じ方法で車の向きを決めた 10 Hz の値を 0.5 秒ごとにまとめる
+/// (位置・速度は平均、前後G・横Gは絶対値が一番大きいもの、躍度は一番大きいもの。山を見逃さないため)
+enum ReplayExport {
+    static let fileName = "replay.csv"
+    static let stepS = 0.5
+
+    /// 走行フォルダに replay.csv を書く。加速度から車の向きが決まらなければ(端末が動いていた・記録が短い)書かない
+    @discardableResult
+    static func write(folder: URL, handheld: Bool) throws -> Int {
+        let rows = try ReviewLoader.motionRows(folder: folder, handheld: handheld)
+        guard let t0 = rows.first?.t else { throw DriveEvalError.noData }
+        var out = "unix_s,lat,lon,kmh,lon_g,lat_g,jerk\n"
+        var n = 0
+        var i = 0
+        while i < rows.count {
+            let bucket = Int((rows[i].t - t0) / stepS)
+            var j = i
+            var sLa = 0.0, sLo = 0.0, sV = 0.0
+            var pLon = 0.0, pLat = 0.0, pJ = 0.0
+            while j < rows.count && Int((rows[j].t - t0) / stepS) == bucket {
+                let r = rows[j]
+                sLa += r.la; sLo += r.lo; sV += r.kmh
+                if let v = r.lonG, abs(v) > abs(pLon) { pLon = v }
+                if let v = r.latG, abs(v) > abs(pLat) { pLat = v }
+                if let v = r.jerk, v > pJ { pJ = v }
+                j += 1
+            }
+            let c = Double(j - i)
+            out += String(format: "%.1f,%.7f,%.7f,%.1f,%.3f,%.3f,%.2f\n",
+                          t0 + Double(bucket) * stepS, sLa / c, sLo / c, sV / c, pLon, pLat, pJ)
+            n += 1
+            i = j
+        }
+        try out.write(to: folder.appendingPathComponent(fileName), atomically: true, encoding: .utf8)
+        return n
+    }
+}

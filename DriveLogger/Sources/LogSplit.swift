@@ -8,7 +8,7 @@ enum LogSplit {
     /// 両方にそのまま写すもの(雨雲レーダー・アメダスは時刻の幅が広いので、分けずに両方に置く)
     static let copyFiles = ["rain_radar.jsonl", "amedas.jsonl"]
     /// 分けたら作り直す・取り直すもの(運転評価・トンネルの補い・天気)。両方から消す
-    static let dropFiles = ["evaluation.json", "location_filled.csv", "weather.json"]
+    static let dropFiles = ["evaluation.json", "replay.csv", "location_filled.csv", "weather.json"]
 
     /// CSV を at(UNIX 秒)の前と後に分ける。at ちょうどの行は後ろに入れる。行数 (前, 後) を返す。
     /// 大きなファイル(加速度は数十MB)でも少しずつ読んで書く

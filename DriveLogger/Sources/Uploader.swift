@@ -184,6 +184,26 @@ final class Uploader: ObservableObject {
         }
     }
 
+    /// 地図の運転リプレイ用の replay.csv を送る(リプレイを作る前に送り終えた走行は、振り返りを開いたときにここで送る)。
+    /// 送れたら true。送ってある・まだ全体を送っていない(このあといつも通り送られる)・つながらないときは false
+    @discardableResult
+    func sendReplay(_ id: String) async -> Bool {
+        guard online, let base = AppSettings.shared.baseURL, var meta = LogStore.shared.load(id),
+              meta.rawSent.contains("meta.json"), !meta.rawSent.contains(ReplayExport.fileName),
+              meta.modeChangePending != true, meta.resetPending != true else { return false }
+        let file = LogStore.shared.dir(id).appendingPathComponent(ReplayExport.fileName)
+        guard FileManager.default.fileExists(atPath: file.path) else { return false }
+        var c = URLComponents(url: base.appendingPathComponent("api/rawlog"), resolvingAgainstBaseURL: false)!
+        c.queryItems = [URLQueryItem(name: "session", value: id), URLQueryItem(name: "file", value: ReplayExport.fileName)]
+        if !meta.travelMode.isCar { c.queryItems?.append(URLQueryItem(name: "kind", value: "trip")) }
+        guard (try? await send(file: file, to: c.url!, method: "PUT")) != nil else { return false }
+        // 送っている間に書き換わっていないか、読み直してから記録する
+        meta = LogStore.shared.load(id) ?? meta
+        if !meta.rawSent.contains(ReplayExport.fileName) { meta.rawSent.append(ReplayExport.fileName) }
+        LogStore.shared.save(meta)
+        return true
+    }
+
     /// 地図サーバーが、トンネルなどで GPS が途切れた区間を道路(電車は線路)に沿って補った位置(location_filled.csv)を受け取り、
     /// 走行フォルダに保存する。サーバーはあとから補い直すこと(線路のデータが入った・補い方が良くなった・移動手段を直した)が
     /// あるので、振り返りを開くたびに取り直す。端末のものと中身が変わったら true(読み直す)。
