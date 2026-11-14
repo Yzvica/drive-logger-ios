@@ -192,6 +192,10 @@ final class LogStore: ObservableObject {
     private var evalCache: [String: Evaluation] = [:]
     /// evaluation.json が無かった走行(一覧を描くたびにファイルを探さないため)
     private var evalMissing: Set<String> = []
+    /// 前の基準の評価を計算し直し始めた走行(失敗しても何度も始めないため)
+    private var reEvalStarted: Set<String> = []
+    /// 前の基準の評価の計算し直しは1件ずつ(一覧に古い記録が並んでも端末が重くならないように)
+    private static let reEvalQueue = DispatchQueue(label: "reEvaluate", qos: .utility)
 
     /// 保存してある評価。無ければ nil
     func evaluation(_ id: String) -> Evaluation? {
@@ -204,7 +208,26 @@ final class LogStore: ObservableObject {
             return nil
         }
         evalCache[id] = e
+        if e.version < Evaluation.currentVersion { reEvaluateOld(id) }
         return e
+    }
+
+    /// 前の基準で付けた評価を、端末に残っている生データから今の基準で計算し直す。
+    /// 計算し終わるまでは前の点数を出しておき、終わったら差し替える。
+    /// 地図サーバーは自分で付け直しているので送り直さない(まだ送っていなければ、いつも通り新しい方が送られる)
+    private func reEvaluateOld(_ id: String) {
+        guard !reEvalStarted.contains(id) else { return }
+        reEvalStarted.insert(id)
+        let folder = dir(id)
+        let handheld = (sessions.first { $0.id == id } ?? load(id))?.travelMode.allowsHandheldEval ?? false
+        LogStore.reEvalQueue.async {
+            let e = LogStore.writeEvaluation(folder: folder, allowHandheld: handheld)
+            DispatchQueue.main.async {
+                guard let e else { return }  // 生データが無いなどで計算できなければ、前の点数のまま
+                self.evalCache[id] = e
+                self.objectWillChange.send()
+            }
+        }
     }
 
     /// 評価を計算して evaluation.json に書く(時間がかかるので、メインスレッドでは呼ばない)。
