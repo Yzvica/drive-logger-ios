@@ -30,6 +30,8 @@ struct ReviewData {
     var hasAltitude: Bool
     /// 気圧で高度を補正したか
     var altitudeFromPressure: Bool
+    /// 間引く前の 10 Hz の前後G・横G・躍度(G円と再生中の値をなめらかに動かすため。加速度がなければ空)
+    var fine: FineMotion = FineMotion()
 
     /// グラフに出す点の数の上限(長い走行でも描くのが重くならないように)
     static let maxSamples = 1500
@@ -53,6 +55,34 @@ struct ReviewData {
         if k <= 0 { return 0 }
         if k >= xs.count { return xs.count - 1 }
         return x - xs[k - 1] <= xs[k] - x ? k - 1 : k
+    }
+}
+
+/// 10 Hz の前後G・横G・躍度・速度(時刻は開始からの秒)
+struct FineMotion {
+    var t: [Double] = []
+    var lonG: [Double] = []
+    var latG: [Double] = []
+    var jerk: [Double] = []
+    var kmh: [Double] = []
+
+    var isEmpty: Bool { t.count < 2 }
+
+    /// 時刻 t の値(前後の点から線形に補う)
+    func at(_ x: Double) -> (lonG: Double, latG: Double, jerk: Double, kmh: Double)? {
+        guard !isEmpty else { return nil }
+        let k = min(max(DriveEval.bisectLeft(t, x), 1), t.count - 1)
+        let a = k - 1, b = k
+        let r = t[b] > t[a] ? min(1, max(0, (x - t[a]) / (t[b] - t[a]))) : 0
+        func f(_ v: [Double]) -> Double { v[a] + (v[b] - v[a]) * r }
+        return (f(lonG), f(latG), f(jerk), f(kmh))
+    }
+
+    /// from〜to の範囲の点の位置(G円の尾に使う)
+    func range(_ from: Double, _ to: Double) -> Range<Int> {
+        guard !isEmpty else { return 0..<0 }
+        let lo = DriveEval.bisectLeft(t, from), hi = DriveEval.bisectLeft(t, to)
+        return lo..<max(lo, min(hi, t.count))
     }
 }
 
@@ -114,9 +144,20 @@ enum ReviewLoader {
                                     altM: alt?.at(t), lonG: pLon, latG: pLat, jerk: pJ))
             i = j
         }
+        var fine = FineMotion()
+        if hasMotion {
+            fine.t.reserveCapacity(dense.count)
+            for d in dense {
+                fine.t.append(d.t - d0.t)
+                fine.lonG.append(d.lonG ?? 0)
+                fine.latG.append(d.latG ?? 0)
+                fine.jerk.append(d.jerk ?? 0)
+                fine.kmh.append(d.kmh)
+            }
+        }
         return ReviewData(samples: out, hasMotion: hasMotion,
                           hasAltitude: out.contains { $0.altM != nil },
-                          altitudeFromPressure: alt?.fromPressure ?? false)
+                          altitudeFromPressure: alt?.fromPressure ?? false, fine: fine)
     }
 
     /// 位置のファイル。地図サーバーがトンネルなどで途切れた区間を道路に沿って補った location_filled.csv を

@@ -112,7 +112,7 @@ struct ReviewView: View {
             guard playing else { return }
             var last = Date()
             while !Task.isCancelled && playing {
-                try? await Task.sleep(nanoseconds: 50_000_000)
+                try? await Task.sleep(nanoseconds: 33_000_000)
                 guard let d = data, let end = d.samples.last?.t else { break }
                 let now = Date()
                 // 再生中に指でグラフをなぞった・地図の線を押したら、そこから続ける
@@ -206,7 +206,7 @@ struct ReviewView: View {
                         if !events.isEmpty { eventChips(d) }
                     }
                     if d.hasMotion {
-                        GCircleView(data: d, index: cursor)
+                        GCircleView(data: d, t: currentT(d))
                             .frame(width: 84, height: 84)
                     }
                 }
@@ -280,15 +280,23 @@ struct ReviewView: View {
     }
 
     /// カーソルの時点の値(カーソルが無ければ、なぞり方の説明)
+    /// いま見ている時刻(開始からの秒)。再生中は再生している時刻、止めていればカーソルの点
+    private func currentT(_ d: ReviewData) -> Double? {
+        if playing, let t = playT { return t }
+        return cursor.flatMap { d.samples.indices.contains($0) ? d.samples[$0].t : nil }
+    }
+
     private func readout(_ d: ReviewData) -> some View {
         HStack(spacing: 8) {
             if let i = cursor, d.samples.indices.contains(i) {
                 let s = d.samples[i]
                 Text(Display.time.string(from: Date(timeIntervalSince1970: s.unix))).bold()
-                Text(String(format: "%.0f km/h", s.kmh))
-                if let g = s.lonG { Text(String(format: "前後%+.2f", g)).foregroundStyle(ReviewColors.lon) }
-                if let g = s.latG { Text(String(format: "横%+.2f", g)).foregroundStyle(ReviewColors.lat) }
-                if let j = s.jerk { Text(String(format: "躍度%.1f", j)).foregroundStyle(ReviewColors.jerk) }
+                // 再生中は間引く前の 10 Hz の値を補って出す(間引いた点だけだと数秒ごとにしか変わらない)
+                let f = playing ? playT.flatMap { d.fine.at($0) } : nil
+                Text(String(format: "%.0f km/h", f?.kmh ?? s.kmh))
+                if let g = f?.lonG ?? s.lonG { Text(String(format: "前後%+.2f", g)).foregroundStyle(ReviewColors.lon) }
+                if let g = f?.latG ?? s.latG { Text(String(format: "横%+.2f", g)).foregroundStyle(ReviewColors.lat) }
+                if let j = f?.jerk ?? s.jerk { Text(String(format: "躍度%.1f", j)).foregroundStyle(ReviewColors.jerk) }
                 if s.lonG == nil, let a = s.altM { Text(String(format: "%.0f m", a)) }
                 Spacer(minLength: 0)
                 if meta.finished && !playing && i > 0 && i < d.samples.count - 1 {
@@ -350,18 +358,21 @@ struct ReviewView: View {
     }
 }
 
-/// G円: 前後G(上が加速)と横G(左に曲がると左)を点で、直近 4 秒を尾で出す。点線の円は急な操作の目安
+/// G円: ボウルに乗った球のように、加速すると下・減速すると上・左に曲がると右へ球が動く。
+/// 間引く前の 10 Hz の値を補って動かし、直近 4 秒を尾で出す。点線の円は急な操作の目安
 struct GCircleView: View {
     let data: ReviewData
-    let index: Int?
+    /// 開始からの秒(nil なら球を出さない)
+    let t: Double?
 
     var body: some View {
         Canvas { ctx, size in
             let c = CGPoint(x: size.width / 2, y: size.height / 2)
             let r = min(size.width, size.height) / 2 - 9
             let maxG = 0.5
+            // 球は G と逆向き(体が押される向き)に動く: 加速(lonG +)で下、左に曲がる(latG +)と右
             func p(_ lon: Double, _ lat: Double) -> CGPoint {
-                var x = -lat / maxG * r, y = -lon / maxG * r
+                var x = lat / maxG * r, y = lon / maxG * r
                 let d = (x * x + y * y).squareRoot()
                 if d > r { x *= r / d; y *= r / d }
                 return CGPoint(x: c.x + x, y: c.y + y)
@@ -378,25 +389,29 @@ struct GCircleView: View {
             let hr = r * DriveEval.harshG / maxG
             ctx.stroke(Path(ellipseIn: CGRect(x: c.x - hr, y: c.y - hr, width: hr * 2, height: hr * 2)),
                        with: .color(.orange.opacity(0.8)), style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
-            ctx.draw(Text("加速").font(.system(size: 7)).foregroundColor(.secondary), at: CGPoint(x: c.x, y: 4))
-            ctx.draw(Text("減速").font(.system(size: 7)).foregroundColor(.secondary), at: CGPoint(x: c.x, y: size.height - 4))
+            ctx.draw(Text("減速").font(.system(size: 7)).foregroundColor(.secondary), at: CGPoint(x: c.x, y: 4))
+            ctx.draw(Text("加速").font(.system(size: 7)).foregroundColor(.secondary), at: CGPoint(x: c.x, y: size.height - 4))
 
-            guard let i = index, data.samples.indices.contains(i),
-                  let lon = data.samples[i].lonG, let lat = data.samples[i].latG else { return }
-            let now = data.samples[i].t
-            var k = i
-            while k > 0 && now - data.samples[k - 1].t <= 4 { k -= 1 }
-            if k < i {
-                var trail = Path()
-                var started = false
-                for s in data.samples[k...i] {
-                    guard let a = s.lonG, let b = s.latG else { continue }
-                    if started { trail.addLine(to: p(a, b)) } else { trail.move(to: p(a, b)); started = true }
+            guard let t else { return }
+            let now: (lon: Double, lat: Double)
+            if let f = data.fine.at(t) {
+                now = (f.lonG, f.latG)
+                let idx = data.fine.range(t - 4, t)
+                if idx.count >= 2 {
+                    var trail = Path()
+                    trail.move(to: p(data.fine.lonG[idx.lowerBound], data.fine.latG[idx.lowerBound]))
+                    for k in idx.dropFirst() { trail.addLine(to: p(data.fine.lonG[k], data.fine.latG[k])) }
+                    trail.addLine(to: p(f.lonG, f.latG))
+                    ctx.stroke(trail, with: .color(ReviewColors.lon.opacity(0.45)), lineWidth: 1.5)
                 }
-                ctx.stroke(trail, with: .color(ReviewColors.lon.opacity(0.45)), lineWidth: 1.5)
+            } else {
+                // 10 Hz の値がない(古い形のデータ)ときは、間引いた点を使う
+                let i = data.index(atT: t)
+                guard let lon = data.samples[i].lonG, let lat = data.samples[i].latG else { return }
+                now = (lon, lat)
             }
-            let q = p(lon, lat)
-            let over = max(abs(lon), abs(lat)) > DriveEval.harshG
+            let q = p(now.lon, now.lat)
+            let over = max(abs(now.lon), abs(now.lat)) > DriveEval.harshG
             let dot = Path(ellipseIn: CGRect(x: q.x - 4.5, y: q.y - 4.5, width: 9, height: 9))
             ctx.fill(dot, with: .color(over ? .orange : ReviewColors.lon))
             ctx.stroke(dot, with: .color(.white), lineWidth: 1.5)
