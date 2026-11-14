@@ -185,8 +185,9 @@ final class LogStore: ObservableObject {
 
     /// 送る順番。evaluation.json は無ければ飛ばす(前の版の走行や、短すぎて評価できなかった走行)。
     /// unsent の判定には使わない(評価を足す前に送り終えた走行を、もう一度送らないため)
-    /// rain_radar.jsonl・amedas.jsonl は記録中に取った雨雲レーダーとアメダス(RainFetcher・AmedasFetcher)。取れなかった走行には無い
-    static let uploadFiles = ["location.csv", "motion.csv", "pressure.csv", "evaluation.json",
+    /// rain_radar.jsonl・amedas.jsonl は記録中に取った雨雲レーダーとアメダス(RainFetcher・AmedasFetcher)。取れなかった走行には無い。
+    /// replay.csv は地図の運転リプレイ用(評価と一緒に作る)
+    static let uploadFiles = ["location.csv", "motion.csv", "pressure.csv", "evaluation.json", ReplayExport.fileName,
                               RainRadar.fileName, Amedas.fileName, "meta.json"]
 
     private var evalCache: [String: Evaluation] = [:]
@@ -239,6 +240,12 @@ final class LogStore: ObservableObject {
             let enc = JSONEncoder()
             enc.outputFormatting = [.prettyPrinted, .sortedKeys]
             try enc.encode(e).write(to: folder.appendingPathComponent("evaluation.json"), options: .atomic)
+            // 地図の運転リプレイ用の値も、評価と同じ車の向きで作っておく(作れなくても評価は使う)
+            do {
+                try ReplayExport.write(folder: folder, handheld: allowHandheld)
+            } catch {
+                NSLog("リプレイの値を作れませんでした(\(folder.lastPathComponent)): \(error.localizedDescription)")
+            }
             return e
         } catch {
             NSLog("運転評価を計算できませんでした(\(folder.lastPathComponent)): \(error.localizedDescription)")
@@ -369,7 +376,7 @@ final class LogStore: ObservableObject {
         evaluate(id) { _ in
             // 計算し直した評価も地図サーバーに送る
             if var m = self.load(id) {
-                m.rawSent.removeAll { $0 == "evaluation.json" }
+                m.rawSent.removeAll { $0 == "evaluation.json" || $0 == ReplayExport.fileName }
                 self.save(m)
             }
             done()

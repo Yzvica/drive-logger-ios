@@ -1,59 +1,33 @@
 import Charts
+import MapKit
 import SwiftUI
 
-/// 下の段のグラフで見るもの
-enum ReviewMetric: String, CaseIterable, Identifiable {
-    case altitude, lonG, latG, jerk
+/// 下の段に出すグラフ
+enum ReviewLower: String, CaseIterable, Identifiable {
+    /// 前後G・横G(重ねて)と躍度
+    case motion
+    case altitude
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
+        case .motion: return "G・躍度"
         case .altitude: return "高度"
-        case .lonG: return "前後G"
-        case .latG: return "横G"
-        case .jerk: return "躍度"
-        }
-    }
-
-    var unit: String {
-        switch self {
-        case .altitude: return "m"
-        case .lonG, .latG: return "G"
-        case .jerk: return "m/s³"
-        }
-    }
-
-    var needsMotion: Bool { self != .altitude }
-
-    func value(_ s: ReviewSample) -> Double? {
-        switch self {
-        case .altitude: return s.altM
-        case .lonG: return s.lonG
-        case .latG: return s.latG
-        case .jerk: return s.jerk
-        }
-    }
-
-    func format(_ v: Double) -> String {
-        switch self {
-        case .altitude: return String(format: "%.0f m", v)
-        case .lonG, .latG: return String(format: "%+.2f G", v)
-        case .jerk: return String(format: "%.1f m/s³", v)
-        }
-    }
-
-    /// 目安の線(急な操作の 0.3G、躍度の 4 m/s³)
-    var guides: [Double] {
-        switch self {
-        case .altitude: return []
-        case .lonG, .latG: return [DriveEval.harshG, -DriveEval.harshG]
-        case .jerk: return [DriveEval.harshJerk]
         }
     }
 }
 
-/// 地図とグラフで走行を振り返る画面。グラフをなぞると地図の丸が動き、地図の軌跡をタップするとグラフのカーソルが動く
+/// グラフの色(地図のリプレイと同じ)
+enum ReviewColors {
+    static let speed = Color.accentColor
+    static let lon = Color(red: 0.12, green: 0.53, blue: 0.90)
+    static let lat = Color(red: 0.26, green: 0.63, blue: 0.28)
+    static let jerk = Color(red: 0.0, green: 0.54, blue: 0.48)
+}
+
+/// 地図とグラフで走行を振り返る画面。グラフをなぞると地図の丸が動き、地図の軌跡をタップするとグラフのカーソルが動く。
+/// ▶ で走りを再生(リプレイ)でき、丸が地図の上を走り、グラフのカーソルと G円が一緒に動く
 struct ReviewView: View {
     let meta: SessionMeta
     @EnvironmentObject var store: LogStore
@@ -68,8 +42,19 @@ struct ReviewView: View {
     @State private var failed: String?
     @State private var cursor: Int?
     @State private var focus: Int?
-    @State private var metric: ReviewMetric = .altitude
+    @State private var lower: ReviewLower = .motion
     @State private var byDistance = false
+
+    // リプレイ
+    @State private var playing = false
+    @State private var rate: Double = 10
+    @State private var follow = true
+    /// 再生している時刻(開始からの秒)
+    @State private var playT: Double?
+    /// 再生がカーソルを動かした最後の点(指でなぞって動かしたのと見分けるため)
+    @State private var autoCursor: Int?
+
+    static let rates: [Double] = [1, 5, 10, 30, 60]
 
     private var events: [EvalEvent] {
         meta.travelMode.hasDriveEval ? (store.evaluation(meta.id)?.events ?? []) : []
@@ -121,7 +106,30 @@ struct ReviewView: View {
             if await Uploader.shared.fetchFilled(meta) {
                 await load(force: true)
             }
+            await sendReplayIfNeeded()
         }
+        .task(id: playing) {
+            guard playing else { return }
+            var last = Date()
+            while !Task.isCancelled && playing {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+                guard let d = data, let end = d.samples.last?.t else { break }
+                let now = Date()
+                // 再生中に指でグラフをなぞった・地図の線を押したら、そこから続ける
+                if let c = cursor, c != autoCursor, d.samples.indices.contains(c) { playT = d.samples[c].t }
+                var t = (playT ?? 0) + now.timeIntervalSince(last) * rate
+                last = now
+                if t >= end {
+                    t = end
+                    playing = false
+                }
+                playT = t
+                let i = d.index(atT: t)
+                autoCursor = i
+                cursor = i
+            }
+        }
+        .onDisappear { playing = false }
     }
 
     private func load(force: Bool = false) async {
@@ -136,21 +144,52 @@ struct ReviewView: View {
         switch result {
         case .success(let d):
             data = d
-            if !d.hasAltitude && d.hasMotion { metric = .lonG }
+            if !d.hasMotion { lower = .altitude }
             if d.samples.count < 2 { failed = "位置の記録が少なすぎて表示できません" }
         case .failure(let e):
             failed = "ログを読めませんでした: \(e.localizedDescription)"
         }
     }
 
-    private func metrics(_ d: ReviewData) -> [ReviewMetric] {
-        ReviewMetric.allCases.filter { m in m.needsMotion ? d.hasMotion : d.hasAltitude }
+    /// 地図の運転リプレイ用の replay.csv を、無ければ作り、地図サーバーにまだ送っていなければ送る
+    /// (リプレイの機能ができる前に記録した走行のため)
+    private func sendReplayIfNeeded() async {
+        guard meta.finished, meta.travelMode.hasDriveEval, data?.hasMotion == true else { return }
+        let folder = store.dir(meta.id)
+        let handheld = meta.travelMode.allowsHandheldEval
+        if !FileManager.default.fileExists(atPath: folder.appendingPathComponent(ReplayExport.fileName).path) {
+            let made: Bool = await Task.detached(priority: .utility) {
+                (try? ReplayExport.write(folder: folder, handheld: handheld)) != nil
+            }.value
+            guard made else { return }
+        }
+        await Uploader.shared.sendReplay(meta.id)
+    }
+
+    private func togglePlay(_ d: ReviewData) {
+        if playing {
+            playing = false
+            return
+        }
+        let end = d.samples.last?.t ?? 0
+        // カーソルがあればそこから、最後まで見ていたら最初から
+        var t = cursor.flatMap { d.samples.indices.contains($0) ? d.samples[$0].t : nil } ?? playT ?? 0
+        if t >= end - 0.5 { t = 0 }
+        playT = t
+        let i = d.index(atT: t)
+        autoCursor = i
+        cursor = i
+        playing = true
     }
 
     private func content(_ d: ReviewData) -> some View {
-        VStack(spacing: 0) {
+        let t = playing ? playT : nil
+        let pos = t.flatMap { d.position(atT: $0) }.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }
+        return VStack(spacing: 0) {
             ReviewMapView(samples: d.samples, events: events, style: settings.mapStyle, cursor: cursor, focus: focus,
-                          zoomDownIn: settings.oneFingerZoomDownIn) { i in
+                          zoomDownIn: settings.oneFingerZoomDownIn,
+                          playPosition: pos, heading: t.flatMap { d.bearing(atT: $0) }, follow: playing && follow,
+                          onUserPan: { follow = false }) { i in
                 cursor = i
             }
             .frame(maxHeight: .infinity)
@@ -160,22 +199,44 @@ struct ReviewView: View {
                 if meta.travelMode.hasDriveEval, let eval = store.evaluation(meta.id) {
                     ScoreStrip(eval: eval)
                 }
-                readout(d)
-                if !events.isEmpty { eventChips(d) }
-                ReviewChart(data: d, value: { $0.kmh }, unit: "km/h", guides: [], byDistance: byDistance,
-                            events: events, cursor: $cursor, format: { String(format: "%.0f km/h", $0) }, title: "速度")
-                    .frame(height: 110)
-                let ms = metrics(d)
-                if !ms.isEmpty {
-                    Picker("下のグラフ", selection: $metric) {
-                        ForEach(ms) { Text($0.title).tag($0) }
+                HStack(alignment: .center, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        controls(d)
+                        readout(d)
+                        if !events.isEmpty { eventChips(d) }
+                    }
+                    if d.hasMotion {
+                        GCircleView(data: d, index: cursor)
+                            .frame(width: 84, height: 84)
+                    }
+                }
+                ReviewChart(data: d, series: [ChartSeries(name: "速度", short: "", color: ReviewColors.speed, value: { $0.kmh })],
+                            unit: "km/h", guides: [], byDistance: byDistance, events: events, cursor: $cursor,
+                            format: { String(format: "%.0f km/h", $0) }, title: "速度")
+                    .frame(height: 88)
+                if d.hasMotion && d.hasAltitude {
+                    Picker("下のグラフ", selection: $lower) {
+                        ForEach(ReviewLower.allCases) { Text($0.title).tag($0) }
                     }
                     .pickerStyle(.segmented)
-                    let m = ms.contains(metric) ? metric : ms[0]
-                    ReviewChart(data: d, value: { m.value($0) }, unit: m.unit, guides: m.guides, byDistance: byDistance,
-                                events: events, cursor: $cursor, format: m.format, title: m.title)
-                        .frame(height: 110)
-                    if m == .altitude && !d.altitudeFromPressure {
+                }
+                if d.hasMotion && (lower == .motion || !d.hasAltitude) {
+                    ReviewChart(data: d,
+                                series: [ChartSeries(name: "横G", short: "横", color: ReviewColors.lat, value: { $0.latG }),
+                                         ChartSeries(name: "前後G", short: "前後", color: ReviewColors.lon, value: { $0.lonG })],
+                                unit: "G", guides: [DriveEval.harshG, -DriveEval.harshG], byDistance: byDistance, events: events,
+                                cursor: $cursor, format: { String(format: "%+.2f", $0) }, title: "前後G・横G")
+                        .frame(height: 88)
+                    ReviewChart(data: d, series: [ChartSeries(name: "躍度", short: "", color: ReviewColors.jerk, value: { $0.jerk })],
+                                unit: "m/s³", guides: [DriveEval.harshJerk], byDistance: byDistance, events: events,
+                                cursor: $cursor, format: { String(format: "%.1f m/s³", $0) }, title: "躍度")
+                        .frame(height: 76)
+                } else if d.hasAltitude {
+                    ReviewChart(data: d, series: [ChartSeries(name: "高度", short: "", color: ReviewColors.speed, value: { $0.altM })],
+                                unit: "m", guides: [], byDistance: byDistance, events: events, cursor: $cursor,
+                                format: { String(format: "%.0f m", $0) }, title: "高度")
+                        .frame(height: 88)
+                    if !d.altitudeFromPressure {
                         Text("気圧の記録が無いので、GPS の高度です").font(.caption2).foregroundStyle(.secondary)
                     }
                 }
@@ -185,18 +246,52 @@ struct ReviewView: View {
         }
     }
 
+    /// 再生・速さ・追尾
+    private func controls(_ d: ReviewData) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                togglePlay(d)
+            } label: {
+                Image(systemName: playing ? "pause.fill" : "play.fill")
+                    .frame(width: 30, height: 20)
+            }
+            .buttonStyle(.borderedProminent)
+            .accessibilityLabel(playing ? "一時停止" : "再生")
+            Menu {
+                Picker("再生の速さ", selection: $rate) {
+                    ForEach(ReviewView.rates, id: \.self) { r in Text("×\(Int(r))").tag(r) }
+                }
+            } label: {
+                Text("×\(Int(rate))").monospacedDigit().frame(minWidth: 30)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityLabel("再生の速さ ×\(Int(rate))")
+            Button {
+                follow.toggle()
+            } label: {
+                Label("追尾", systemImage: follow ? "location.fill" : "location")
+            }
+            .buttonStyle(.bordered)
+            .tint(follow ? .purple : .secondary)
+            .accessibilityHint("再生中、地図が丸についていきます")
+        }
+        .font(.subheadline)
+        .controlSize(.small)
+    }
+
     /// カーソルの時点の値(カーソルが無ければ、なぞり方の説明)
     private func readout(_ d: ReviewData) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             if let i = cursor, d.samples.indices.contains(i) {
                 let s = d.samples[i]
                 Text(Display.time.string(from: Date(timeIntervalSince1970: s.unix))).bold()
                 Text(String(format: "%.0f km/h", s.kmh))
-                if let a = s.altM { Text(String(format: "%.0f m", a)) }
-                if let g = s.lonG { Text(String(format: "前後%+.2f", g)) }
-                if let g = s.latG { Text(String(format: "横%+.2f", g)) }
+                if let g = s.lonG { Text(String(format: "前後%+.2f", g)).foregroundStyle(ReviewColors.lon) }
+                if let g = s.latG { Text(String(format: "横%+.2f", g)).foregroundStyle(ReviewColors.lat) }
+                if let j = s.jerk { Text(String(format: "躍度%.1f", j)).foregroundStyle(ReviewColors.jerk) }
+                if s.lonG == nil, let a = s.altM { Text(String(format: "%.0f m", a)) }
                 Spacer(minLength: 0)
-                if meta.finished && i > 0 && i < d.samples.count - 1 {
+                if meta.finished && !playing && i > 0 && i < d.samples.count - 1 {
                     Button {
                         splitAt = Date(timeIntervalSince1970: s.unix)
                     } label: {
@@ -206,31 +301,39 @@ struct ReviewView: View {
                     .accessibilityLabel("ここで記録を分ける")
                 }
                 Button {
+                    playing = false
                     cursor = nil
                 } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                 }
                 .accessibilityLabel("選択を消す")
             } else {
-                Text("グラフをなぞるか、地図の線をタップ").foregroundStyle(.secondary)
+                Text("▶で再生、グラフをなぞるか地図の線をタップ").foregroundStyle(.secondary)
                 Spacer(minLength: 0)
                 Text(String(format: "%.1f km", d.samples.last?.km ?? 0)).foregroundStyle(.secondary)
             }
         }
         .font(.caption).monospacedDigit()
         .lineLimit(1)
-        .minimumScaleFactor(0.7)
+        .minimumScaleFactor(0.6)
     }
 
-    /// 出来事(押すとその場面へ)
+    /// 出来事(押すとその 5 秒前から等倍で再生)
     private func eventChips(_ d: ReviewData) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 ForEach(Array(events.enumerated()), id: \.offset) { _, e in
                     Button {
-                        let i = d.index(atUnix: e.tUnix)
+                        let at = d.index(atUnix: e.tUnix)
+                        let t = max(0, d.samples[at].t - 5)
+                        let i = d.index(atT: t)
+                        rate = 1
+                        playT = t
+                        autoCursor = i
                         cursor = i
-                        focus = i
+                        focus = at
+                        follow = true
+                        playing = true
                     } label: {
                         VStack(spacing: 0) {
                             Text(e.kind).font(.caption.bold())
@@ -244,6 +347,61 @@ struct ReviewView: View {
                 }
             }
         }
+    }
+}
+
+/// G円: 前後G(上が加速)と横G(左に曲がると左)を点で、直近 4 秒を尾で出す。点線の円は急な操作の目安
+struct GCircleView: View {
+    let data: ReviewData
+    let index: Int?
+
+    var body: some View {
+        Canvas { ctx, size in
+            let c = CGPoint(x: size.width / 2, y: size.height / 2)
+            let r = min(size.width, size.height) / 2 - 9
+            let maxG = 0.5
+            func p(_ lon: Double, _ lat: Double) -> CGPoint {
+                var x = -lat / maxG * r, y = -lon / maxG * r
+                let d = (x * x + y * y).squareRoot()
+                if d > r { x *= r / d; y *= r / d }
+                return CGPoint(x: c.x + x, y: c.y + y)
+            }
+            for k in 1...5 {
+                let rr = r * Double(k) / 5
+                ctx.stroke(Path(ellipseIn: CGRect(x: c.x - rr, y: c.y - rr, width: rr * 2, height: rr * 2)),
+                           with: .color(.secondary.opacity(0.25)), lineWidth: 0.6)
+            }
+            var cross = Path()
+            cross.move(to: CGPoint(x: c.x - r, y: c.y)); cross.addLine(to: CGPoint(x: c.x + r, y: c.y))
+            cross.move(to: CGPoint(x: c.x, y: c.y - r)); cross.addLine(to: CGPoint(x: c.x, y: c.y + r))
+            ctx.stroke(cross, with: .color(.secondary.opacity(0.25)), lineWidth: 0.6)
+            let hr = r * DriveEval.harshG / maxG
+            ctx.stroke(Path(ellipseIn: CGRect(x: c.x - hr, y: c.y - hr, width: hr * 2, height: hr * 2)),
+                       with: .color(.orange.opacity(0.8)), style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
+            ctx.draw(Text("加速").font(.system(size: 7)).foregroundColor(.secondary), at: CGPoint(x: c.x, y: 4))
+            ctx.draw(Text("減速").font(.system(size: 7)).foregroundColor(.secondary), at: CGPoint(x: c.x, y: size.height - 4))
+
+            guard let i = index, data.samples.indices.contains(i),
+                  let lon = data.samples[i].lonG, let lat = data.samples[i].latG else { return }
+            let now = data.samples[i].t
+            var k = i
+            while k > 0 && now - data.samples[k - 1].t <= 4 { k -= 1 }
+            if k < i {
+                var trail = Path()
+                var started = false
+                for s in data.samples[k...i] {
+                    guard let a = s.lonG, let b = s.latG else { continue }
+                    if started { trail.addLine(to: p(a, b)) } else { trail.move(to: p(a, b)); started = true }
+                }
+                ctx.stroke(trail, with: .color(ReviewColors.lon.opacity(0.45)), lineWidth: 1.5)
+            }
+            let q = p(lon, lat)
+            let over = max(abs(lon), abs(lat)) > DriveEval.harshG
+            let dot = Path(ellipseIn: CGRect(x: q.x - 4.5, y: q.y - 4.5, width: 9, height: 9))
+            ctx.fill(dot, with: .color(over ? .orange : ReviewColors.lon))
+            ctx.stroke(dot, with: .color(.white), lineWidth: 1.5)
+        }
+        .accessibilityLabel("G円")
     }
 }
 
@@ -273,10 +431,19 @@ struct ScoreStrip: View {
     }
 }
 
-/// 1 段のグラフ。指でなぞるとカーソルが動く
+/// グラフの 1 本の線
+struct ChartSeries {
+    let name: String
+    /// カーソルの値の前に付ける短い名前(線が 1 本なら空)
+    let short: String
+    let color: Color
+    let value: (ReviewSample) -> Double?
+}
+
+/// 1 段のグラフ(線は 1 本か、重ねて数本)。指でなぞるとカーソルが動く
 struct ReviewChart: View {
     let data: ReviewData
-    let value: (ReviewSample) -> Double?
+    let series: [ChartSeries]
     let unit: String
     let guides: [Double]
     let byDistance: Bool
@@ -305,20 +472,29 @@ struct ReviewChart: View {
 
     /// カーソルの時点の値(グラフの左上の見出しに出す)
     private var cursorText: String {
-        guard let i = cursor, data.samples.indices.contains(i), let v = value(data.samples[i]) else { return "" }
-        return "  " + format(v)
+        guard let i = cursor, data.samples.indices.contains(i) else { return "" }
+        let parts = series.compactMap { sr in sr.value(data.samples[i]).map { sr.short + format($0) } }
+        return parts.isEmpty ? "" : "  " + parts.joined(separator: " ")
+    }
+
+    private struct Pt {
+        let k: Int
+        let x: Double
+        let y: Double
     }
 
     var body: some View {
-        let pts = data.samples.compactMap { s in value(s).map { (x: x(s), y: $0) } }
+        let pts: [Pt] = series.indices.flatMap { k in
+            data.samples.compactMap { s in series[k].value(s).map { Pt(k: k, x: x(s), y: $0) } }
+        }
         let eventXs = events.map { e -> Double in
             let i = data.index(atUnix: e.tUnix)
             return x(data.samples[i])
         }
         Chart {
             ForEach(Array(pts.enumerated()), id: \.offset) { _, p in
-                LineMark(x: .value(byDistance ? "km" : "分", p.x), y: .value(unit, p.y))
-                    .foregroundStyle(Color.accentColor)
+                LineMark(x: .value(byDistance ? "km" : "分", p.x), y: .value(unit, p.y), series: .value("系列", p.k))
+                    .foregroundStyle(series[p.k].color)
                     .lineStyle(StrokeStyle(lineWidth: 1.2))
             }
             ForEach(guides, id: \.self) { g in
@@ -333,7 +509,7 @@ struct ReviewChart: View {
             }
             if let i = cursor, data.samples.indices.contains(i) {
                 RuleMark(x: .value("選択", x(data.samples[i])))
-                    .foregroundStyle(Color.purple)
+                    .foregroundStyle(Color.primary)
                     .lineStyle(StrokeStyle(lineWidth: 1.5))
             }
         }
@@ -367,7 +543,7 @@ struct ReviewChart: View {
         }
         .overlay(alignment: .topLeading) {
             (Text("\(title)(\(unit))").foregroundColor(.secondary)
-                + Text(cursorText).bold().foregroundColor(.purple))
+                + Text(cursorText).bold().foregroundColor(.primary))
                 .font(.caption2).monospacedDigit()
                 .padding(.leading, 28)
                 .allowsHitTesting(false)

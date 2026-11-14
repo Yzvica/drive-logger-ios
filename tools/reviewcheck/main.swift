@@ -78,6 +78,19 @@ check("補った点を含めて読める", roadRows > 30 && fs.count >= 2 && abs
 let filledKmh = fs.filter { $0.unix - t0 > 70 && $0.unix - t0 < 110 }.map(\.kmh).max() ?? 0
 let origKmh = s.filter { $0.unix - t0 > 70 && $0.unix - t0 < 110 }.map(\.kmh).max() ?? 0
 check("補った区間の速度は推定の速度", abs(filledKmh - origKmh) < 1, String(format: "%.1f km/h(元 %.1f km/h)", filledKmh, origKmh))
+
+// 地図のリプレイに送る replay.csv: 0.5 秒ごと、時刻が増えていき、G の山が振り返りの値と同じくらい
+let replayRows = try ReplayExport.write(folder: tmp, handheld: false)
+let replayText = try String(contentsOf: tmp.appendingPathComponent(ReplayExport.fileName), encoding: .utf8)
+let rl = replayText.split(whereSeparator: \.isNewline).map { $0.split(separator: ",", omittingEmptySubsequences: false) }
+let rts = rl.dropFirst().compactMap { Double($0[0]) }
+check("replay.csv の見出しと行数", rl.first?.joined(separator: ",") == "unix_s,lat,lon,kmh,lon_g,lat_g,jerk" && rts.count == replayRows && replayRows > 10, "\(replayRows) 行")
+check("replay.csv の時刻は 0.5 秒ずつ増える", zip(rts, rts.dropFirst()).allSatisfy { $1 - $0 > 0.4 && $1 - $0 < 30 }, String(format: "%.1f〜%.1f", rts.first ?? 0, rts.last ?? 0))
+let replayMaxG = rl.dropFirst().compactMap { Double($0[4]).map(abs) }.max() ?? 0
+let filledMaxG = fs.compactMap { $0.lonG.map(abs) }.max() ?? 0
+check("replay.csv の前後G", abs(replayMaxG - filledMaxG) < 0.01, String(format: "最大 %.2f G(振り返り %.2f G)", replayMaxG, filledMaxG))
+let mid = s[s.count / 2]
+check("再生中の位置を補える", car.position(atT: mid.t).map { abs($0.lat - mid.lat) < 1e-9 } ?? false, "\(mid.t) 秒")
 try? FileManager.default.removeItem(at: tmp)
 
 exit(failed ? 1 : 0)

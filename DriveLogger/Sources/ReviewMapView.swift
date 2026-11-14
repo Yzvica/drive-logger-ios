@@ -13,6 +13,14 @@ struct ReviewMapView: UIViewRepresentable {
     let focus: Int?
     /// ダブルタップして上下に動かす拡大縮小を、下で拡大にする(設定の値)
     var zoomDownIn: Bool = false
+    /// 再生中の位置(点と点の間を補ったもの)。nil なら cursor の点に丸を置く
+    var playPosition: CLLocationCoordinate2D? = nil
+    /// 再生中の進む向き(北から時計回りの度)。nil なら矢印を出さない
+    var heading: Double? = nil
+    /// 再生中、丸を地図の真ん中に置き続ける
+    var follow: Bool = false
+    /// 手で地図を動かしたとき(追尾をやめるため)
+    var onUserPan: () -> Void = {}
     let onPick: (Int) -> Void
 
     /// 速度の色分け(km/h の上限と色)
@@ -64,8 +72,10 @@ struct ReviewMapView: UIViewRepresentable {
         c.zoom.update(map, downIn: zoomDownIn)
         if c.drawnCount != samples.count { drawTrack(map, c) }
 
-        if let i = cursor, samples.indices.contains(i) {
-            let coord = CLLocationCoordinate2D(latitude: samples[i].lat, longitude: samples[i].lon)
+        let dotCoord = playPosition ?? cursor.flatMap { i in
+            samples.indices.contains(i) ? CLLocationCoordinate2D(latitude: samples[i].lat, longitude: samples[i].lon) : nil
+        }
+        if let coord = dotCoord {
             if let dot = c.dot {
                 dot.coordinate = coord
             } else {
@@ -77,6 +87,15 @@ struct ReviewMapView: UIViewRepresentable {
         } else if let dot = c.dot {
             map.removeAnnotation(dot)
             c.dot = nil
+        }
+        if let dot = c.dot, let v = map.view(for: dot) { c.orient(v, heading: heading, map: map) }
+
+        // 再生中の追尾: 丸を真ん中に置き続ける(手で動かしたら呼び出し側が follow を切る)
+        if follow, let coord = playPosition {
+            c.followed = cursor
+            c.focused = focus
+            if !c.userPanning { map.setCenter(coord, animated: false) }
+            return
         }
 
         if focus != c.focused {
@@ -183,7 +202,30 @@ struct ReviewMapView: UIViewRepresentable {
         var focused: Int?
         /// 追尾を確かめた最後の点(丸が動いたときだけ追尾する)
         var followed: Int?
+        /// 指で地図を動かしている間
+        var userPanning = false
         let zoom = OneFingerZoom()
+
+        /// 再生中の丸に向きの矢印を付ける(地図が回っていればその分を引く)
+        func orient(_ v: MKAnnotationView, heading: Double?, map: MKMapView) {
+            let arrow = v.viewWithTag(7)
+            arrow?.isHidden = heading == nil
+            let deg = (heading ?? 0) - map.camera.heading
+            v.transform = heading == nil ? .identity : CGAffineTransform(rotationAngle: deg * .pi / 180)
+        }
+
+        /// 地図が動き始めたとき、指で動かしたのか(追尾をやめる)、プログラムで動かしたのかを見分ける
+        func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool) {
+            let touching = mapView.subviews.first?.gestureRecognizers?.contains { $0.state == .began || $0.state == .changed } ?? false
+            if touching {
+                userPanning = true
+                if parent.follow { parent.onUserPan() }
+            }
+        }
+
+        func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
+            userPanning = false
+        }
 
         init(parent: ReviewMapView) { self.parent = parent }
 
@@ -219,6 +261,17 @@ struct ReviewMapView: UIViewRepresentable {
                 v.displayPriority = .required
                 v.zPriority = .max
                 v.isUserInteractionEnabled = false
+                if v.viewWithTag(7) == nil {
+                    let arrow = UIImageView(image: UIImage(systemName: "arrowtriangle.up.fill",
+                                                           withConfiguration: UIImage.SymbolConfiguration(pointSize: 8, weight: .bold)))
+                    arrow.tintColor = .white
+                    arrow.tag = 7
+                    arrow.frame = CGRect(x: 0, y: 0, width: size, height: size)
+                    arrow.contentMode = .center
+                    arrow.isHidden = true
+                    v.addSubview(arrow)
+                }
+                orient(v, heading: parent.heading, map: mapView)
                 return v
             }
             if annotation is EventAnnotation {
