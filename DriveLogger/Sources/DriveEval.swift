@@ -39,7 +39,10 @@ struct EvalEvent: Codable, Hashable {
 
 /// evaluation.json と同じ形
 struct Evaluation: Codable, Hashable {
-    var version: Int = 2
+    /// 採点の基準の版。基準(DriveEval の数値)を変えたら 1 増やす。
+    /// 端末に残っている前の版の evaluation.json は、開いたときに LogStore が計算し直す
+    static let currentVersion = 2
+    var version: Int = Evaluation.currentVersion
     var score: Double
     var items: [EvalItem]
     var movingS: Double
