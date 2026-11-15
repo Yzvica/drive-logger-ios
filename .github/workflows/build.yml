@@ -1,9 +1,10 @@
 name: ビルド(署名なし IPA)
 
+# macOS のビルドは Actions の使用時間が10倍で数えられるので、main に入ったときだけ動かす。
+# PR の段階で試したいときは、Actions の画面から workflow_dispatch でブランチを選んで手で動かす。
 on:
   push:
     branches: [main]
-  pull_request:
   workflow_dispatch:
 
 jobs:
