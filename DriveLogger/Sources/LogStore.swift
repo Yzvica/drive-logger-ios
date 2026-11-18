@@ -41,6 +41,8 @@ struct SessionMeta: Codable, Identifiable, Hashable {
     var splitFrom: String?
     /// 記録中にアプリが落ちて閉じた走行で、運転評価をまだ付けていなければ true(送る前に付ける)。付けようとしたら false
     var evalPending: Bool?
+    /// 落ちて閉じた走行の track.gpx に、書き込めていなかった最後の数分を location.csv から足したか
+    var gpxRepaired: Bool?
 
     var travelMode: TravelMode { mode ?? .car }
 
@@ -151,9 +153,12 @@ final class LogStore: ObservableObject {
                     h.write(Data("</trkseg></trk>\n</gpx>\n".utf8))
                     try? h.close()
                 }
-                if let s = try? String(contentsOf: gpx, encoding: .utf8) {
-                    meta.points = s.components(separatedBy: "<trkpt ").count - 1
-                }
+            }
+            // GPX は書き込みをまとめているので、落ちると最後の数分が抜ける。location.csv(30秒ごとに書き出している)から足す
+            LogStore.repairGPX(folder: folder)
+            meta.gpxRepaired = true
+            if let s = try? String(contentsOf: gpx, encoding: .utf8) {
+                meta.points = s.components(separatedBy: "<trkpt ").count - 1
             }
             meta.end = Date(timeIntervalSince1970: last)
             meta.recovered = true
@@ -170,7 +175,60 @@ final class LogStore: ObservableObject {
             meta.evalPending = true
             save(meta)
         }
+        // 前の版で閉じた走行は GPX の最後の数分が抜けたまま送っていたので、足して地図の記録を送り直す
+        // (地図サーバーの前の記録を消してから全部送る。記録を分けたときと同じ流れ)
         reload()
+        for var meta in sessions where meta.recovered == true && meta.gpxRepaired == nil && meta.finished {
+            let added = LogStore.repairGPX(folder: dir(meta.id))
+            meta.gpxRepaired = true
+            if added > 0 {
+                meta.points += added
+                if meta.gpxSent || !meta.rawSent.isEmpty {
+                    meta.gpxSent = false
+                    meta.rawSent = []
+                    meta.resetPending = true
+                }
+                NSLog("落ちた走行 \(meta.id) の GPX に \(added) 点を足しました")
+            }
+            save(meta)
+        }
+        reload()
+    }
+
+    /// 閉じた track.gpx の最後の点より後の位置を location.csv から足す(精度 50m 以内の点だけ。記録中と同じ基準)。足した点の数を返す
+    @discardableResult
+    static func repairGPX(folder: URL) -> Int {
+        let gpxURL = folder.appendingPathComponent("track.gpx")
+        guard var gpx = try? String(contentsOf: gpxURL, encoding: .utf8),
+              let csv = try? String(contentsOf: folder.appendingPathComponent("location.csv"), encoding: .utf8) else { return 0 }
+        // GPX の最後の時刻(無ければ全部足す)
+        var lastT = -Double.infinity
+        if let open = gpx.range(of: "<time>", options: .backwards),
+           let close = gpx.range(of: "</time>", range: open.upperBound..<gpx.endIndex),
+           let d = Fmt.iso.date(from: String(gpx[open.upperBound..<close.lowerBound])) ?? ISO8601DateFormatter().date(from: String(gpx[open.upperBound..<close.lowerBound])) {
+            lastT = d.timeIntervalSince1970
+        }
+        // unix_s,lat,lon,alt_m,h_acc_m,v_acc_m,speed_ms,...
+        var lines = ""
+        var added = 0
+        for row in csv.split(separator: "\n").dropFirst() {
+            let c = row.split(separator: ",", omittingEmptySubsequences: false)
+            guard c.count >= 7, let t = Double(c[0]), t > lastT + 0.0005,
+                  let lat = Double(c[1]), let lon = Double(c[2]), let acc = Double(c[4]), acc >= 0, acc <= 50 else { continue }
+            var s = "<trkpt lat=\"\(Fmt.n(lat, 7))\" lon=\"\(Fmt.n(lon, 7))\">"
+            if !c[5].isEmpty, let ele = Double(c[3]) { s += "<ele>\(Fmt.n(ele, 1))</ele>" }
+            s += "<time>\(Fmt.iso.string(from: Date(timeIntervalSince1970: t)))</time>"
+            if let sp = Double(c[6]), sp >= 0 { s += "<extensions><speed>\(Fmt.n(sp, 2))</speed></extensions>" }
+            s += "</trkpt>\n"
+            lines += s
+            added += 1
+        }
+        guard added > 0 else { return 0 }
+        let closing = "</trkseg></trk>\n</gpx>\n"
+        if let r = gpx.range(of: "</trkseg>", options: .backwards) { gpx.removeSubrange(r.lowerBound...) }
+        gpx += lines + closing
+        guard (try? gpx.write(to: gpxURL, atomically: true, encoding: .utf8)) != nil else { return 0 }
+        return added
     }
 
     /// 落ちて閉じた走行の運転評価を付ける(Uploader が送る前に呼ぶ)。付けられたら evaluation.json と replay.csv を

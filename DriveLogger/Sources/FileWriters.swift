@@ -74,6 +74,9 @@ final class GPXWriter {
         file.append(s)
     }
 
+    /// 書きためた点をファイルに書き出す(落ちたときに失う点を減らす)
+    func flush() { file.flush() }
+
     func close() {
         file.append("</trkseg></trk>\n</gpx>\n")
         file.close()

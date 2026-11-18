@@ -392,7 +392,7 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
             let now = ProcessInfo.processInfo.systemUptime
             if now - self.lastMetaSave > 30, let m = self.meta {
                 self.lastMetaSave = now
-                self.locationCSV?.flush(); self.motionCSV?.flush(); self.pressureCSV?.flush()
+                self.locationCSV?.flush(); self.motionCSV?.flush(); self.pressureCSV?.flush(); self.gpx?.flush()
                 LogStore.shared.save(m)
             }
         }
