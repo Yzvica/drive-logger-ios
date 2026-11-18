@@ -162,10 +162,11 @@ final class LogStore: ObservableObject {
             NSLog("記録中に止まった走行を閉じました: \(meta.id)")
             save(meta)
         }
-        // 前の版で閉じた走行は評価を付けていなかったので、評価が無ければ付ける(送ってあれば評価だけ送り直す)
+        // 前の版で閉じた走行は評価を付けずに送っていたので、付け直して評価だけ送り直す。
+        // 端末に evaluation.json があっても(ログの詳細を開くと端末だけで計算される)、地図サーバーには届いていないので
+        // ファイルの有無では決めない(1件につき1回だけ。付け直したら evalPending が false になる)
         for var meta in sessions where meta.recovered == true && meta.evalPending == nil && meta.finished
-            && meta.travelMode.hasDriveEval
-            && !FileManager.default.fileExists(atPath: dir(meta.id).appendingPathComponent("evaluation.json").path) {
+            && meta.travelMode.hasDriveEval {
             meta.evalPending = true
             save(meta)
         }
