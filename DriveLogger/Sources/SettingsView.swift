@@ -2,7 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var recorder: Recorder
+    @ObservedObject var recording = RecordingState.shared
     @State private var testResult: String?
 
     var body: some View {
@@ -44,7 +44,7 @@ struct SettingsView: View {
                     Toggle("GPS が切れた・戻ったらバイブ", isOn: $settings.gpsVibrate)
                         // 記録中にここを変えたら、今の記録にもそのまま効かせる
                         .onChange(of: settings.gpsVibrate) { on in
-                            if recorder.isRecording { recorder.gpsVibrateNow = on }
+                            if recording.isRecording { Recorder.shared.gpsVibrateNow = on }
                         }
                 } header: {
                     Text("GPS の受信状態")
@@ -53,7 +53,7 @@ struct SettingsView: View {
                 }
                 Section {
                     Toggle("記録中に雨雲レーダーとアメダスを取る", isOn: $settings.rainRadar)
-                        .disabled(recorder.isRecording)
+                        .disabled(recording.isRecording)
                 } header: {
                     Text("雨")
                 } footer: {
@@ -71,7 +71,7 @@ struct SettingsView: View {
                         Text("50 Hz").tag(50)
                         Text("100 Hz").tag(100)
                     }
-                    .disabled(recorder.isRecording)
+                    .disabled(recording.isRecording)
                     Toggle("走行が終わったら自動で送る", isOn: $settings.autoUpload)
                     Toggle("自動で送るのは Wi-Fi のときだけ", isOn: $settings.uploadWifiOnly)
                     Toggle("記録中は画面を消さない", isOn: $settings.keepScreenOn)

@@ -1,8 +1,6 @@
 import SwiftUI
 
 struct ContentView: View {
-    @EnvironmentObject var recorder: Recorder
-
     var body: some View {
         ZStack {
             TabView {
@@ -15,6 +13,18 @@ struct ContentView: View {
                 SettingsView()
                     .tabItem { Label("設定", systemImage: "gearshape") }
             }
+            // 知らせと合図の光は別の部品にする(ここで Recorder を見ると、記録中は全部のタブが 1 秒に何回も描き直される)
+            RecorderOverlay()
+        }
+    }
+}
+
+/// 「音を鳴らさない」設定のときの知らせと、動画と合わせる合図の光
+struct RecorderOverlay: View {
+    @EnvironmentObject var recorder: Recorder
+
+    var body: some View {
+        ZStack {
             // 「音を鳴らさない」設定のときの知らせ(画面の上に少しのあいだ出す)
             if let n = recorder.notice {
                 VStack {
@@ -34,6 +44,7 @@ struct ContentView: View {
                 Color.white.ignoresSafeArea().allowsHitTesting(false)
             }
         }
+        .allowsHitTesting(false)
     }
 }
 

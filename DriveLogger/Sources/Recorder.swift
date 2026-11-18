@@ -2,12 +2,23 @@ import CoreLocation
 import CoreMotion
 import UIKit
 
+/// 記録中かどうかだけを知らせる。Recorder は記録中 1 秒に何回も変わる(速度・G・軌跡など)ので、
+/// 記録中かどうかしか使わない画面(ログ・振り返り・設定)はこちらを見る。Recorder を見ると、裏のタブに開いたままの
+/// 振り返り(グラフ)まで 1 秒に何回も描き直され、iPhone X では画面が固まって iOS に終了させられた(2026-11-18)
+final class RecordingState: ObservableObject {
+    static let shared = RecordingState()
+    @Published fileprivate(set) var isRecording = false
+    private init() {}
+}
+
 /// GPS・加速度・回転・気圧を記録する。位置情報のバックグラウンド更新でアプリが動き続けるので、
 /// 画面を消しても、ほかのアプリを開いても記録が続く
 final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
     static let shared = Recorder()
 
-    @Published private(set) var isRecording = false
+    @Published private(set) var isRecording = false {
+        didSet { if RecordingState.shared.isRecording != isRecording { RecordingState.shared.isRecording = isRecording } }
+    }
     @Published private(set) var current: SessionMeta?
     @Published private(set) var speedMS: Double = 0
     @Published private(set) var horizontalAccuracy: Double = -1
