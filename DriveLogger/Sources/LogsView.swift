@@ -13,7 +13,7 @@ struct LogsView: View {
 
     @EnvironmentObject var store: LogStore
     @EnvironmentObject var uploader: Uploader
-    @EnvironmentObject var recorder: Recorder
+    @ObservedObject var recording = RecordingState.shared
 
     var body: some View {
         NavigationStack {
@@ -25,7 +25,7 @@ struct LogsView: View {
                         Label(uploader.isUploading ? "送信中…" : "未送信のログを送る(\(store.unsent.count)件)",
                               systemImage: "arrow.up.circle")
                     }
-                    .disabled(uploader.isUploading || recorder.isRecording || store.unsent.isEmpty)
+                    .disabled(uploader.isUploading || recording.isRecording || store.unsent.isEmpty)
                     if let message = uploader.lastMessage {
                         Text(message).font(.footnote).foregroundStyle(.secondary)
                     }
@@ -177,7 +177,7 @@ struct LogDetailView: View {
     let id: String
     @EnvironmentObject var store: LogStore
     @EnvironmentObject var uploader: Uploader
-    @EnvironmentObject var recorder: Recorder
+    @ObservedObject var recording = RecordingState.shared
     /// 選び直した移動手段(確かめるまで)
     @State private var askMode: TravelMode?
     @State private var changingMode = false
@@ -207,7 +207,7 @@ struct LogDetailView: View {
                                 if changingMode { ProgressView() }
                             }
                         }
-                        .disabled(changingMode || uploader.isUploading || recorder.isRecording)
+                        .disabled(changingMode || uploader.isUploading || recording.isRecording)
                     } else {
                         LabeledContent("移動手段") {
                             Label(meta.travelMode.title, systemImage: meta.travelMode.systemImage)

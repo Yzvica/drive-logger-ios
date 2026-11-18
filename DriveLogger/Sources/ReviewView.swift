@@ -33,7 +33,7 @@ struct ReviewView: View {
     @EnvironmentObject var store: LogStore
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var uploader: Uploader
-    @EnvironmentObject var recorder: Recorder
+    @ObservedObject var recording = RecordingState.shared
     @Environment(\.dismiss) private var dismiss
     /// 分ける時刻(「ここで分ける」を押したとき)
     @State private var splitAt: Date?
@@ -305,7 +305,7 @@ struct ReviewView: View {
                     } label: {
                         Label("ここで分ける", systemImage: "scissors").labelStyle(.iconOnly)
                     }
-                    .disabled(uploader.isUploading || recorder.isRecording)
+                    .disabled(uploader.isUploading || recording.isRecording)
                     .accessibilityLabel("ここで記録を分ける")
                 }
                 Button {

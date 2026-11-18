@@ -91,7 +91,9 @@ final class Uploader: ObservableObject {
         Task {
             var done = 0
             var failed: String?
-            for meta in targets {
+            for var meta in targets {
+                // 落ちて閉じた走行は、送る前に運転評価を付ける
+                if meta.evalPending == true, let m = await LogStore.shared.evaluatePending(meta.id) { meta = m }
                 do {
                     try await upload(meta, base: base)
                     done += 1
@@ -154,8 +156,9 @@ final class Uploader: ObservableObject {
             LogStore.shared.save(meta)
         }
 
-        // meta.json は送った記録を書き込んでから最後に送る
-        for name in LogStore.uploadFiles where !meta.rawSent.contains(name) {
+        // meta.json は送った記録を書き込んでから最後に送る。落ちた・固まったときの診断(Diagnostics)があればその前に送る
+        let names = LogStore.uploadFiles.filter { $0 != "meta.json" } + Diagnostics.files(in: dir) + ["meta.json"]
+        for name in names where !meta.rawSent.contains(name) {
             if name == "meta.json" {
                 meta.rawSent.append(name)
                 LogStore.shared.save(meta)
