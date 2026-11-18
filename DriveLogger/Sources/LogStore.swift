@@ -39,6 +39,8 @@ struct SessionMeta: Codable, Identifiable, Hashable {
     var resetPending: Bool?
     /// 分けてできた記録なら、元の記録の走行ID(後半の記録に付ける)
     var splitFrom: String?
+    /// 記録中にアプリが落ちて閉じた走行で、運転評価をまだ付けていなければ true(送る前に付ける)。付けようとしたら false
+    var evalPending: Bool?
 
     var travelMode: TravelMode { mode ?? .car }
 
@@ -90,7 +92,24 @@ final class LogStore: ObservableObject {
     func save(_ meta: SessionMeta) {
         let url = dir(meta.id).appendingPathComponent("meta.json")
         if let data = try? LogStore.encoder.encode(meta) { try? data.write(to: url, options: .atomic) }
-        DispatchQueue.main.async { self.reload() }
+        // 一覧は保存した1件だけ差し替える。記録中は30秒ごとに保存するので、そのたびに全部の meta.json を
+        // 読み直すと、ログが増えるほどメインスレッドが重くなる
+        DispatchQueue.main.async { self.replace(meta.id) }
+    }
+
+    /// 一覧の1件をファイルから読み直して差し替える(無ければ足す。別のスレッドの保存と順番が前後しても、ファイルの最新を使う)。
+    /// メインスレッドで呼ぶ
+    private func replace(_ id: String) {
+        guard let meta = load(id) else { return }
+        var list = sessions
+        if let i = list.firstIndex(where: { $0.id == meta.id }) {
+            if list[i] == meta { return }
+            list[i] = meta
+        } else {
+            list.append(meta)
+            list.sort { $0.start > $1.start }
+        }
+        sessions = list
     }
 
     func load(_ id: String) -> SessionMeta? {
@@ -138,10 +157,44 @@ final class LogStore: ObservableObject {
             }
             meta.end = Date(timeIntervalSince1970: last)
             meta.recovered = true
+            // ふつうに止めたときと同じく、送る前に運転評価を付ける
+            if meta.travelMode.hasDriveEval { meta.evalPending = true }
             NSLog("記録中に止まった走行を閉じました: \(meta.id)")
             save(meta)
         }
+        // 前の版で閉じた走行は評価を付けていなかったので、評価が無ければ付ける(送ってあれば評価だけ送り直す)
+        for var meta in sessions where meta.recovered == true && meta.evalPending == nil && meta.finished
+            && meta.travelMode.hasDriveEval
+            && !FileManager.default.fileExists(atPath: dir(meta.id).appendingPathComponent("evaluation.json").path) {
+            meta.evalPending = true
+            save(meta)
+        }
         reload()
+    }
+
+    /// 落ちて閉じた走行の運転評価を付ける(Uploader が送る前に呼ぶ)。付けられたら evaluation.json と replay.csv を
+    /// 送る対象に戻し(まだ無かったので送ったことになっていた)、最後に meta.json も送り直す。書き直した meta を返す
+    func evaluatePending(_ id: String) async -> SessionMeta? {
+        guard let before = load(id) else { return nil }
+        let folder = dir(id)
+        let handheld = before.travelMode.allowsHandheldEval
+        let e: Evaluation? = await withCheckedContinuation { cont in
+            LogStore.reEvalQueue.async { cont.resume(returning: LogStore.writeEvaluation(folder: folder, allowHandheld: handheld)) }
+        }
+        guard var meta = load(id) else { return nil }
+        meta.evalPending = false
+        if e != nil {
+            let resend = ["evaluation.json", ReplayExport.fileName, "meta.json"]
+            meta.rawSent.removeAll { resend.contains($0) }
+        }
+        save(meta)
+        await MainActor.run {
+            guard let e else { return }
+            self.evalCache[id] = e
+            self.evalMissing.remove(id)
+            self.objectWillChange.send()
+        }
+        return meta
     }
 
     /// ファイルの最後の bytes バイト(文字列として)
@@ -278,6 +331,7 @@ final class LogStore: ObservableObject {
     static func allSent(_ meta: SessionMeta) -> Bool {
         (meta.gpxSent || !meta.travelMode.isCar) && rawFiles.allSatisfy(meta.rawSent.contains) && meta.modeChangePending != true
             && meta.resetPending != true
+            && meta.evalPending != true
     }
 
     // MARK: - 記録を分ける

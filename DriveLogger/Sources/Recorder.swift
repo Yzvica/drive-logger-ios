@@ -99,7 +99,7 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
                 if AppSettings.shared.soundOff {
                     Recorder.shared.showNotice(e.rawValue)
                 } else if AppSettings.shared.coachSound {
-                    Beeper.shared.play(.coach(e))
+                    Beeper.shared.playLater(.coach(e))
                 }
             }
             }

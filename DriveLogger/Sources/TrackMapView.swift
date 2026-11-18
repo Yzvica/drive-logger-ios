@@ -96,18 +96,46 @@ struct TrackMapView: UIViewRepresentable {
         if context.coordinator.style != style { apply(style, to: map, context: context) }
         context.coordinator.zoom.update(map, downIn: zoomDownIn)
 
-        // 点が増えるたびに作り直すと重いので、10点ごとに線を引き直す
+        // 軌跡は TrackMapView.chunk 点ずつの線に分け、伸びていく最後の1本だけを 10 点ごとに引き直す。
+        // 全体を1本の線で引き直すと、長い走行(数千点)では引き直すたびに地図全体の線を描き直すことになり、
+        // 非力な端末(iPhone X)では走るほど重くなって固まる原因になる
         let c = context.coordinator
+        if track.count < c.drawnCount {
+            // 新しい記録が始まった
+            map.removeOverlays(c.fixedLines)
+            if let old = c.line { map.removeOverlay(old) }
+            c.fixedLines = []
+            c.fixedCount = 0
+            c.line = nil
+            c.drawnCount = 0
+        }
         guard track.count != c.drawnCount,
-              track.count < 2 || track.count - c.drawnCount >= 10 || track.count < c.drawnCount
+              track.count < 2 || track.count - c.drawnCount >= 10
         else { return }
+        // 決まった(もう伸びない)ぶんを固定の線にする。つなぎ目が切れないよう、前の線の最後の点から始める
+        while track.count - c.fixedCount > TrackMapView.chunk {
+            let from = max(0, c.fixedCount - 1), to = c.fixedCount + TrackMapView.chunk
+            let line = TrackMapView.polyline(track[from..<to])
+            c.fixedLines.append(line)
+            map.addOverlay(line, level: .aboveLabels)
+            c.fixedCount = to
+        }
         c.drawnCount = track.count
         if let old = c.line { map.removeOverlay(old) }
         c.line = nil
-        guard track.count >= 2 else { return }
-        let line = MKPolyline(coordinates: track, count: track.count)
+        let tail = track[max(0, c.fixedCount - 1)...]
+        guard tail.count >= 2 else { return }
+        let line = TrackMapView.polyline(tail)
         c.line = line
         map.addOverlay(line, level: .aboveLabels)
+    }
+
+    /// 固定の線1本の点の数
+    static let chunk = 300
+
+    private static func polyline(_ points: ArraySlice<CLLocationCoordinate2D>) -> MKPolyline {
+        let a = Array(points)
+        return MKPolyline(coordinates: a, count: a.count)
     }
 
     private func apply(_ style: MapStyle, to map: MKMapView, context: Context) {
@@ -149,7 +177,11 @@ struct TrackMapView: UIViewRepresentable {
         /// 最初の位置で、街の様子が分かるくらいまで寄せたか
         var zoomedIn = false
         var drawnCount = 0
+        /// 伸びていく最後の線
         var line: MKPolyline?
+        /// もう伸びない線と、そこまでの点の数
+        var fixedLines: [MKPolyline] = []
+        var fixedCount = 0
         var tiles: MKTileOverlay?
         var style: MapStyle?
         weak var credit: UILabel?

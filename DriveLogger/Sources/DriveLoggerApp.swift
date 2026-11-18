@@ -18,6 +18,8 @@ struct DriveLoggerApp: App {
                 .onAppear {
                     // 記録中に落ちた走行があれば閉じてから、送信を始める
                     store.recoverUnfinished(except: recorder.current?.id)
+                    // 前回落ちた・固まったときの診断を受け取る(届くと走行フォルダに保存して一緒に送る)
+                    Diagnostics.shared.start()
                     uploader.start()
                 }
         }

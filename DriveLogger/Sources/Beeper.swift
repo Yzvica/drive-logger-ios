@@ -18,19 +18,24 @@ final class Beeper {
 
     private var players: [Kind: AVAudioPlayer] = [:]
     private var configured = false
+    /// 音の準備と再生はこの順番待ちで行う。オーディオセッションの切り替え(setActive)は iOS の音の仕組みの都合で
+    /// 長く待たされることがあり、メインスレッドで行うと画面と位置の記録まで止まってしまうため
+    private let queue = DispatchQueue(label: "beeper", qos: .userInitiated)
 
     private init() {
         let nc = NotificationCenter.default
         // 電話やほかのアプリの音で中断されたあと、もう一度鳴らせるようにする
-        nc.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
+        nc.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: nil) { [weak self] note in
             guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
                   AVAudioSession.InterruptionType(rawValue: raw) == .ended else { return }
-            self?.reactivate()
+            self?.queue.async { self?.reactivate() }
         }
         // 音の仕組みがリセットされたら、作り直す
-        nc.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.configured = false
-            self?.players.removeAll()
+        nc.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: nil) { [weak self] _ in
+            self?.queue.async {
+                self?.configured = false
+                self?.players.removeAll()
+            }
         }
     }
 
@@ -44,10 +49,22 @@ final class Beeper {
     }
 
     /// 鳴らした時刻(音の出だし)を返す。オーディオの準備に失敗したときは nil
+    /// 同期の合図・目印など、鳴らした時刻が要るときに使う(鳴らし終えるまで待つ)
     @discardableResult
     func play(_ kind: Kind) -> Date? {
         // 「音を鳴らさない」設定のときは鳴らさない(呼んだ側が画面で知らせる)
         if AppSettings.shared.soundOff { return nil }
+        return queue.sync { playNow(kind) }
+    }
+
+    /// 記録中のサポートの音など、時刻が要らないときに使う(待たない)
+    func playLater(_ kind: Kind) {
+        if AppSettings.shared.soundOff { return }
+        queue.async { _ = self.playNow(kind) }
+    }
+
+    /// queue の中で呼ぶ
+    private func playNow(_ kind: Kind) -> Date? {
         configure()
         guard let p = player(kind) else { return nil }
         p.currentTime = 0
