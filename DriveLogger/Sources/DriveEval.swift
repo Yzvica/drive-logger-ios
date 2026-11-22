@@ -41,7 +41,7 @@ struct EvalEvent: Codable, Hashable {
 struct Evaluation: Codable, Hashable {
     /// 採点の基準の版。基準(DriveEval の数値)を変えたら 1 増やす。
     /// 端末に残っている前の版の evaluation.json は、開いたときに LogStore が計算し直す
-    static let currentVersion = 2
+    static let currentVersion = 3
     var version: Int = Evaluation.currentVersion
     var score: Double
     var items: [EvalItem]
@@ -55,10 +55,15 @@ struct Evaluation: Codable, Hashable {
     var mount: String?
     /// 手持ちのとき、走行中のうち採点に使えた時間の割合(手で端末を動かした区間は外す)
     var usableRatio: Double?
+    /// 区間ごとの採点(カーブ・右左折・停止・発進。SegmentEval.swift)。版 2 までの evaluation.json には無い
+    var segments: [EvalSegment]? = nil
+    /// 種類("curve" / "stop" / "start")ごとの回数と平均点
+    var segmentStats: [String: EvalSegStat]? = nil
 
     enum CodingKeys: String, CodingKey {
-        case version, score, items, stops, events, source, mount
+        case version, score, items, stops, events, source, mount, segments
         case movingS = "moving_s", axesQuality = "axes_quality", usableRatio = "usable_ratio"
+        case segmentStats = "segment_stats"
     }
 }
 
@@ -646,7 +651,10 @@ enum DriveEval {
         let events = (harshEvents + stopEvents).enumerated()
             .sorted { $0.element.tUnix != $1.element.tUnix ? $0.element.tUnix < $1.element.tUnix : $0.offset < $1.offset }
             .map { $0.element }
-        return Evaluation(score: round(total, 1), items: out, movingS: round(tMoving, 1), stops: stopVals.count, events: events)
+        let segs = SegmentEval.segments(rows: rows, t0: t0Unix, slon: slon, slat: slat, jlon: jlon, jmag: jmag,
+                                        moving: moving, ok: ok)
+        return Evaluation(score: round(total, 1), items: out, movingS: round(tMoving, 1), stops: stopVals.count, events: events,
+                          segments: segs, segmentStats: SegmentEval.stats(segs))
     }
 
     static func event(_ kind: String, _ rows: [Row], _ t0: Double, _ start: Int, _ end: Int, _ k: Int,

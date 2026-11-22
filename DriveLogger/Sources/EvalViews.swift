@@ -30,6 +30,49 @@ enum EvalStyle {
     }
 }
 
+/// 区間ごとの採点(カーブ・停止・発進)の表示
+enum SegStyle {
+    struct Kind: Hashable {
+        var key: String
+        var title: String
+    }
+
+    static let groups = [Kind(key: "curve", title: "カーブ"), Kind(key: "stop", title: "停止"), Kind(key: "start", title: "発進")]
+
+    /// 項目の点数の印(◎ 90〜、○ 70〜、△ 50〜、×)。スキンと同じ
+    static func mark(_ score: Double) -> String {
+        score >= 90 ? "◎" : score >= 70 ? "○" : score >= 50 ? "△" : "×"
+    }
+
+    /// 「小ささ○ ゆっくり◎ 一筆△」
+    static func marks(_ s: EvalSegment) -> String {
+        s.items.map { "\($0.name)\(mark($0.score))" }.joined(separator: " ")
+    }
+
+    /// いちばん強かった G(「横G 0.28G」など)
+    static func strength(_ s: EvalSegment) -> String {
+        let label = s.group == "curve" ? "横G" : s.kind == "stop" ? "減速" : "加速"
+        return label + String(format: " %.2fG", s.items.first?.value ?? 0)
+    }
+
+    /// 項目ごとの、点数を上げるためのひとこと
+    static let tips: [String: String] = [
+        "curve/size": "カーブの手前で、もう少し速度を落とす",
+        "curve/slow": "ハンドルはゆっくり切って、ゆっくり戻す",
+        "curve/stroke": "ブレーキを少し残したまま曲がり始め、Gを途切れさせない",
+        "stop/size": "早めにブレーキを始めて、弱く長く減速する",
+        "stop/onset": "ブレーキはそっと踏み始める",
+        "stop/stop": "止まる直前にブレーキを少しゆるめる",
+        "start/size": "アクセルを控えめにして、ゆっくり速度を上げる",
+        "start/onset": "アクセルはそっと踏み始める",
+    ]
+
+    static func tip(_ s: EvalSegment) -> String? {
+        guard let worst = s.items.min(by: { $0.score < $1.score }), worst.score < 70 else { return nil }
+        return tips["\(s.group)/\(worst.key)"]
+    }
+}
+
 /// 点数の丸いバッジ
 struct ScoreBadge: View {
     let score: Double
@@ -116,6 +159,9 @@ struct EvalSection: View {
                     LabeledContent(item.name, value: EvalStyle.value(item))
                 }
             }
+            if let segs = eval.segments, !segs.isEmpty {
+                SegmentSection(id: id, eval: eval, segments: segs)
+            }
             if !eval.events.isEmpty {
                 Section("点数を下げた出来事") {
                     ForEach(Array(eval.events.enumerated()), id: \.offset) { _, e in
@@ -150,6 +196,71 @@ struct EvalSection: View {
         store.evaluate(id) { e in
             computing = false
             failed = e == nil
+        }
+    }
+}
+
+/// カーブ・停止・発進ごとの採点: 種類ごとの回数と平均点、点数の低い場面 3 つ(押すとその場面から振り返る)
+struct SegmentSection: View {
+    let id: String
+    let eval: Evaluation
+    let segments: [EvalSegment]
+
+    /// 点数の低い順に 3 つ(同じ点数なら早い順)
+    private var worst: [EvalSegment] {
+        let sorted = segments.enumerated().sorted { a, b in
+            a.element.score != b.element.score ? a.element.score < b.element.score : a.offset < b.offset
+        }
+        return sorted.prefix(3).map { $0.element }
+    }
+
+    var body: some View {
+        Section {
+            ForEach(SegStyle.groups, id: \.self) { g in
+                if let st = eval.segmentStats?[g.key], st.count > 0 {
+                    LabeledContent(g.title) {
+                        HStack(spacing: 6) {
+                            Text("\(st.count)回").foregroundStyle(.secondary)
+                            if let sc = st.score {
+                                Text("平均 \(String(format: "%.0f", sc))点").bold().foregroundStyle(EvalStyle.color(sc))
+                            }
+                        }
+                        .monospacedDigit()
+                    }
+                }
+            }
+            ForEach(Array(worst.enumerated()), id: \.offset) { _, s in
+                NavigationLink(value: LogRoute.reviewAt(id, s.tUnix)) {
+                    SegmentRow(segment: s)
+                }
+            }
+        } header: {
+            Text("カーブ・停止・発進ごと")
+        } footer: {
+            Text("下の 3 つは点数の低い場面です。押すとその場面から振り返りを再生します。区間の点数は総合点には入りません")
+        }
+    }
+}
+
+/// 区間 1 つの行(名前・点数・時刻・項目の印・ひとこと)
+struct SegmentRow: View {
+    let segment: EvalSegment
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(segment.name).bold()
+                Text(String(format: "%.0f点", segment.score)).bold().monospacedDigit()
+                    .foregroundStyle(EvalStyle.color(segment.score))
+                Spacer()
+                Text(Display.time.string(from: Date(timeIntervalSince1970: segment.tUnix)))
+                    .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+            }
+            Text("\(SegStyle.marks(segment))・\(SegStyle.strength(segment))")
+                .font(.caption).monospacedDigit()
+            if let tip = SegStyle.tip(segment) {
+                Label(tip, systemImage: "lightbulb").font(.caption2).foregroundStyle(.secondary)
+            }
         }
     }
 }
@@ -201,6 +312,13 @@ struct CoachPanel: View {
                 .font(.caption.bold()).monospacedDigit()
             if let last = state.last, Date().timeIntervalSince(last.at) < 8 {
                 Text("いま: \(last.event.rawValue)").font(.caption.bold()).foregroundStyle(.orange)
+            }
+            // 直前のカーブ・停止・発進の点数(終わってから 3 秒だけ。音は鳴らさない)
+            if let seg = state.lastSegment, Date().timeIntervalSince(seg.at) < LiveCoach.segShowS {
+                Text("\(seg.segment.name) \(String(format: "%.0f", seg.segment.score))点・\(SegStyle.marks(seg.segment))")
+                    .font(.caption.bold()).monospacedDigit()
+                    .foregroundStyle(EvalStyle.color(seg.segment.score))
+                    .lineLimit(1).minimumScaleFactor(0.7)
             }
         }
     }

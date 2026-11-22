@@ -6,6 +6,7 @@ enum LogRoute: Hashable {
     case day(String) // yyyy-MM-dd(開始時刻のローカル日付)
     case detail(String) // 走行ID
     case review(String) // 走行ID(地図とグラフで振り返る)
+    case reviewAt(String, Double) // 走行ID と UNIX 時刻(その場面の少し前から振り返りを再生する)
 }
 
 struct LogsView: View {
@@ -46,6 +47,7 @@ struct LogsView: View {
                 case .day(let key): DayLogsView(dayKey: key)
                 case .detail(let id): LogDetailView(id: id)
                 case .review(let id): ReviewRoute(id: id)
+                case .reviewAt(let id, let t): ReviewRoute(id: id, startUnix: t)
                 }
             }
             .refreshable { store.reload() }
@@ -375,11 +377,12 @@ struct WeatherSection: View {
 /// 振り返り画面(走行IDから開く)
 struct ReviewRoute: View {
     let id: String
+    var startUnix: Double? = nil
     @EnvironmentObject var store: LogStore
 
     var body: some View {
         if let meta = store.sessions.first(where: { $0.id == id }) {
-            ReviewView(meta: meta).toolbar(.hidden, for: .tabBar)
+            ReviewView(meta: meta, startUnix: startUnix).toolbar(.hidden, for: .tabBar)
         } else {
             Text("ログが見つかりません").foregroundStyle(.secondary)
         }

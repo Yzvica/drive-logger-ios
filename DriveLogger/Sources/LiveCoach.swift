@@ -27,6 +27,8 @@ struct CoachState {
     var recentWorst: String?
     var counts: [CoachEvent: Int] = [:]
     var last: (event: CoachEvent, at: Date)?
+    /// 直前に終わったカーブ・停止・発進の点数(終わってから LiveCoach.segShowS 秒だけ画面に出す)
+    var lastSegment: (segment: EvalSegment, at: Date)?
 }
 
 /// Core Motion とGPS の値を受け取って判定する。呼ぶのは同じ順番待ち(Recorder の motionQueue)から
@@ -42,6 +44,12 @@ final class LiveCoach {
     static let axesSamples = 30
     /// 重力の向きがこれより動いたら、端末を付け直したとみて向き合わせをやり直す
     static let remountDeg = 12.0
+    /// 区間ごとの採点: 直近 segWindowS 秒を segEveryS 秒ごとに採点し、終わってから segSettleS 秒たった区間を出す
+    static let segWindowS = 60.0
+    static let segEveryS = 1.0
+    static let segSettleS = 1.0
+    /// 画面に出しておく秒数
+    static let segShowS = 3.0
 
     private(set) var state = CoachState()
     var onEvent: ((CoachEvent) -> Void)?
@@ -88,6 +96,11 @@ final class LiveCoach {
     private var tick = 0
     private var prevKmh = 0.0
     private var lastScoreT = 0.0
+    private var lastSegT = 0.0
+    /// 種類("curve" / "stop" / "start")ごとに、最後に出した区間の終わりの時刻
+    private var lastSegEnd: [String: Double] = [:]
+    /// 区間を出したときに呼ぶ(テストで使う)
+    var onSegment: ((EvalSegment) -> Void)?
     private var lastSoundT = -100.0
 
     init() {}
@@ -207,6 +220,10 @@ final class LiveCoach {
             lastScoreT = bin.t
             scoreRecent()
         }
+        if bin.t - lastSegT >= LiveCoach.segEveryS {
+            lastSegT = bin.t
+            scoreSegments()
+        }
     }
 
     /// その場で急な操作を見つける(DriveEval.evaluate の「急な操作」「止まり際」と同じしきい値)
@@ -276,18 +293,41 @@ final class LiveCoach {
 
     // MARK: - 直近 5 分の点数
 
-    private func scoreRecent() {
-        guard state.ready, let up, let fwd, let left, let last = bins.last else { return }
-        let from = last.t - LiveCoach.windowS
+    /// 直近 seconds 秒の行(車の向きに合わせ、停止を判定したもの)
+    private func recentRows(_ seconds: Double) -> (rows: [E.Row], t0: Double)? {
+        guard state.ready, let up, let fwd, let left, let last = bins.last else { return nil }
+        let from = last.t - seconds
         let win = bins.filter { $0.t > from }
-        let moving = Double(win.filter { $0.kmh > E.movingKmh }.count) / Double(E.HZ)
-        guard moving >= LiveCoach.minMovingS else { state.recentScore = nil; return }
+        guard !win.isEmpty else { return nil }
         let stopped = E.detectStops(yaw: win.map { E.dot($0.rot, up) }, vib: win.map(\.vib), gpsKmh: win.map(\.kmh))
         let rows = zip(win, stopped).map { b, s in
             E.Row(rx: E.dot(b.acc, left), ry: -E.dot(b.acc, fwd), kmh: s ? 0 : b.kmh, lat: b.lat, lon: b.lon, stopped: s)
         }
-        let ev = E.evaluate(rows: rows, t0Unix: win[0].t)
+        return (rows, win[0].t)
+    }
+
+    private func scoreRecent() {
+        guard let (rows, t0) = recentRows(LiveCoach.windowS) else { return }
+        let moving = Double(rows.filter { $0.kmh > E.movingKmh }.count) / Double(E.HZ)
+        guard moving >= LiveCoach.minMovingS else { state.recentScore = nil; return }
+        let ev = E.evaluate(rows: rows, t0Unix: t0)
         state.recentScore = ev.score
         state.recentWorst = ev.items.min { $0.score < $1.score }.flatMap { $0.score < 80 ? $0.key : nil }
+    }
+
+    /// 直近の区間(カーブ・停止・発進)を採点し、新しく終わったものがあれば画面に出す。音は鳴らさない
+    private func scoreSegments() {
+        guard let (rows, t0) = recentRows(LiveCoach.segWindowS), let now = bins.last?.t else { return }
+        let segs = E.evaluate(rows: rows, t0Unix: t0).segments ?? []
+        // 窓の始めで切れた区間は使わない。終わってから少し待って、区間の終わりが決まったものだけ。
+        // 同じ種類の区間は重ならないので、前に出した区間の終わりより後に始まったものだけを新しい区間とする
+        // (同じ区間を採点し直すと、終わりの時刻が少しずれることがあるため)
+        let done = segs.filter {
+            $0.startUnix > t0 + 0.5 && $0.endUnix <= now - LiveCoach.segSettleS && $0.startUnix > lastSegEnd[$0.group] ?? 0
+        }
+        guard let seg = done.last else { return }
+        for s in done { lastSegEnd[s.group] = max(lastSegEnd[s.group] ?? 0, s.endUnix) }
+        state.lastSegment = (seg, Date(timeIntervalSince1970: now))
+        onSegment?(seg)
     }
 }
