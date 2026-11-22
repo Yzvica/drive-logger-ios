@@ -1,5 +1,5 @@
 {
- "version": 2,
+ "version": 3,
  "score": 42.9,
  "items": [
   {
@@ -87,5 +87,305 @@
    "lon": 139.0057653,
    "kmh": 44.0
   }
- ]
+ ],
+ "segments": [
+  {
+   "kind": "start",
+   "name": "発進",
+   "side": null,
+   "score": 82.7,
+   "items": [
+    {
+     "key": "size",
+     "name": "加速の強さ",
+     "value": 0.182,
+     "score": 65.3,
+     "good": 0.12,
+     "bad": 0.3
+    },
+    {
+     "key": "onset",
+     "name": "踏み始め",
+     "value": 0.677,
+     "score": 100.0,
+     "good": 1.0,
+     "bad": 4.0
+    }
+   ],
+   "start_unix": 1794000006.4,
+   "end_unix": 1794000013.3,
+   "t_unix": 1794000011.1,
+   "lat": 35.0001425,
+   "lon": 139.0000544,
+   "kmh": 26.0
+  },
+  {
+   "kind": "curve",
+   "name": "左カーブ",
+   "side": "left",
+   "score": 78.7,
+   "items": [
+    {
+     "key": "size",
+     "name": "小ささ",
+     "value": 0.18,
+     "score": 84.9,
+     "good": 0.15,
+     "bad": 0.35
+    },
+    {
+     "key": "slow",
+     "name": "ゆっくり",
+     "value": 1.678,
+     "score": 77.4,
+     "good": 1.0,
+     "bad": 4.0
+    },
+    {
+     "key": "stroke",
+     "name": "一筆",
+     "value": 0.039,
+     "score": 73.8,
+     "good": 0.0,
+     "bad": 0.15
+    }
+   ],
+   "start_unix": 1794000036.8,
+   "end_unix": 1794000045.2,
+   "t_unix": 1794000039.2,
+   "lat": 35.0033823,
+   "lon": 139.0013267,
+   "kmh": 49.8,
+   "angle_deg": 55,
+   "min_kmh": 49.7
+  },
+  {
+   "kind": "curve",
+   "name": "右カーブ",
+   "side": "right",
+   "score": 33.0,
+   "items": [
+    {
+     "key": "size",
+     "name": "小ささ",
+     "value": 0.558,
+     "score": 0.0,
+     "good": 0.15,
+     "bad": 0.35
+    },
+    {
+     "key": "slow",
+     "name": "ゆっくり",
+     "value": 5.179,
+     "score": 0.0,
+     "good": 1.0,
+     "bad": 4.0
+    },
+    {
+     "key": "stroke",
+     "name": "一筆",
+     "value": 0.001,
+     "score": 99.1,
+     "good": 0.0,
+     "bad": 0.15
+    }
+   ],
+   "start_unix": 1794000073.8,
+   "end_unix": 1794000076.6,
+   "t_unix": 1794000074.9,
+   "lat": 35.0048219,
+   "lon": 139.0057653,
+   "kmh": 44.0,
+   "angle_deg": 51,
+   "min_kmh": 43.1
+  },
+  {
+   "kind": "stop",
+   "name": "停止",
+   "side": null,
+   "score": 51.4,
+   "items": [
+    {
+     "key": "size",
+     "name": "減速の強さ",
+     "value": 0.329,
+     "score": 10.6,
+     "good": 0.15,
+     "bad": 0.35
+    },
+    {
+     "key": "onset",
+     "name": "踏み始め",
+     "value": 1.692,
+     "score": 76.9,
+     "good": 1.0,
+     "bad": 4.0
+    },
+    {
+     "key": "stop",
+     "name": "止まり際",
+     "value": 1.665,
+     "score": 66.7,
+     "good": 0.5,
+     "bad": 4.0
+    }
+   ],
+   "start_unix": 1794000096.3,
+   "end_unix": 1794000102.3,
+   "t_unix": 1794000102.3,
+   "lat": 35.0072457,
+   "lon": 139.0069256,
+   "kmh": 0.0
+  },
+  {
+   "kind": "start",
+   "name": "発進",
+   "side": null,
+   "score": 65.6,
+   "items": [
+    {
+     "key": "size",
+     "name": "加速の強さ",
+     "value": 0.244,
+     "score": 31.2,
+     "good": 0.12,
+     "bad": 0.3
+    },
+    {
+     "key": "onset",
+     "name": "踏み始め",
+     "value": 0.975,
+     "score": 100.0,
+     "good": 1.0,
+     "bad": 4.0
+    }
+   ],
+   "start_unix": 1794000111.2,
+   "end_unix": 1794000116.7,
+   "t_unix": 1794000115.1,
+   "lat": 35.0073627,
+   "lon": 139.0069813,
+   "kmh": 26.2
+  },
+  {
+   "kind": "stop",
+   "name": "停止",
+   "side": null,
+   "score": 89.4,
+   "items": [
+    {
+     "key": "size",
+     "name": "減速の強さ",
+     "value": 0.205,
+     "score": 72.4,
+     "good": 0.15,
+     "bad": 0.35
+    },
+    {
+     "key": "onset",
+     "name": "踏み始め",
+     "value": 0.673,
+     "score": 100.0,
+     "good": 1.0,
+     "bad": 4.0
+    },
+    {
+     "key": "stop",
+     "name": "止まり際",
+     "value": 0.648,
+     "score": 95.8,
+     "good": 0.5,
+     "bad": 4.0
+    }
+   ],
+   "start_unix": 1794000150.6,
+   "end_unix": 1794000161.7,
+   "t_unix": 1794000161.7,
+   "lat": 35.0092826,
+   "lon": 139.0121854,
+   "kmh": 0.1
+  },
+  {
+   "kind": "start",
+   "name": "発進",
+   "side": null,
+   "score": 84.9,
+   "items": [
+    {
+     "key": "size",
+     "name": "加速の強さ",
+     "value": 0.174,
+     "score": 69.7,
+     "good": 0.12,
+     "bad": 0.3
+    },
+    {
+     "key": "onset",
+     "name": "踏み始め",
+     "value": 0.706,
+     "score": 100.0,
+     "good": 1.0,
+     "bad": 4.0
+    }
+   ],
+   "start_unix": 1794000173.5,
+   "end_unix": 1794000181.3,
+   "t_unix": 1794000178.0,
+   "lat": 35.0092464,
+   "lon": 139.012323,
+   "kmh": 23.3
+  },
+  {
+   "kind": "stop",
+   "name": "停止",
+   "side": null,
+   "score": 73.0,
+   "items": [
+    {
+     "key": "size",
+     "name": "減速の強さ",
+     "value": 0.263,
+     "score": 43.5,
+     "good": 0.15,
+     "bad": 0.35
+    },
+    {
+     "key": "onset",
+     "name": "踏み始め",
+     "value": 1.209,
+     "score": 93.0,
+     "good": 1.0,
+     "bad": 4.0
+    },
+    {
+     "key": "stop",
+     "name": "止まり際",
+     "value": 1.118,
+     "score": 82.4,
+     "good": 0.5,
+     "bad": 4.0
+    }
+   ],
+   "start_unix": 1794000224.4,
+   "end_unix": 1794000232.0,
+   "t_unix": 1794000232.0,
+   "lat": 35.010798,
+   "lon": 139.0184715,
+   "kmh": 0.0
+  }
+ ],
+ "segment_stats": {
+  "curve": {
+   "count": 2,
+   "score": 55.9
+  },
+  "stop": {
+   "count": 3,
+   "score": 71.3
+  },
+  "start": {
+   "count": 3,
+   "score": 77.7
+  }
+ }
 }

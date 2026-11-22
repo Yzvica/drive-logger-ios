@@ -30,6 +30,8 @@ enum ReviewColors {
 /// ▶ で走りを再生(リプレイ)でき、丸が地図の上を走り、グラフのカーソルと G円が一緒に動く
 struct ReviewView: View {
     let meta: SessionMeta
+    /// この時刻(UNIX)の場面の少し前から再生する(ログ詳細の「点数の低い場面」から開いたとき)
+    var startUnix: Double? = nil
     @EnvironmentObject var store: LogStore
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var uploader: Uploader
@@ -55,9 +57,31 @@ struct ReviewView: View {
     @State private var autoCursor: Int?
 
     static let rates: [Double] = [1, 5, 10, 30, 60]
+    /// 区間が終わってからも、カードと G円の軌跡を出しておく秒数(スキンと同じ)
+    static let segHoldS = 3.0
+    @State private var startedAt = false
 
     private var events: [EvalEvent] {
         meta.travelMode.hasDriveEval ? (store.evaluation(meta.id)?.events ?? []) : []
+    }
+
+    /// 区間ごとの採点(カーブ・停止・発進)
+    private var segments: [EvalSegment] {
+        meta.travelMode.hasDriveEval ? (store.evaluation(meta.id)?.segments ?? []) : []
+    }
+
+    /// いま見ている時刻の区間: その中にいるか、終わってから segHoldS 秒以内のもの(いちばん最近に始まったもの)
+    private func currentSegment(_ d: ReviewData) -> EvalSegment? {
+        guard let t = currentT(d), let first = d.samples.first else { return nil }
+        let u = first.unix - first.t + t
+        return segments.last(where: { $0.startUnix <= u && u <= $0.endUnix + ReviewView.segHoldS })
+    }
+
+    /// G円に渡す区間(開始からの秒で始め・終わりと、点数)
+    private func segmentSpan(_ d: ReviewData) -> (from: Double, to: Double, score: Double)? {
+        guard let s = currentSegment(d), let first = d.samples.first else { return nil }
+        let off = first.unix - first.t
+        return (from: s.startUnix - off, to: s.endUnix - off, score: s.score)
     }
 
     var body: some View {
@@ -146,6 +170,10 @@ struct ReviewView: View {
             data = d
             if !d.hasMotion { lower = .altitude }
             if d.samples.count < 2 { failed = "位置の記録が少なすぎて表示できません" }
+            if let u = startUnix, !startedAt, d.samples.count >= 2 {
+                startedAt = true
+                playFrom(d, unix: u)
+            }
         case .failure(let e):
             failed = "ログを読めませんでした: \(e.localizedDescription)"
         }
@@ -186,10 +214,10 @@ struct ReviewView: View {
         let t = playing ? playT : nil
         let pos = t.flatMap { d.position(atT: $0) }.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }
         return VStack(spacing: 0) {
-            ReviewMapView(samples: d.samples, events: events, style: settings.mapStyle, cursor: cursor, focus: focus,
-                          zoomDownIn: settings.oneFingerZoomDownIn,
+            ReviewMapView(samples: d.samples, events: events, segments: segments, style: settings.mapStyle, cursor: cursor,
+                          focus: focus, zoomDownIn: settings.oneFingerZoomDownIn,
                           playPosition: pos, heading: t.flatMap { d.bearing(atT: $0) }, follow: playing && follow,
-                          onUserPan: { follow = false }) { i in
+                          onUserPan: { follow = false }, onSegment: { playFrom(d, unix: $0.startUnix + 3) }) { i in
                 cursor = i
             }
             .frame(maxHeight: .infinity)
@@ -203,10 +231,14 @@ struct ReviewView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         controls(d)
                         readout(d)
-                        if !events.isEmpty { eventChips(d) }
+                        if let seg = currentSegment(d) {
+                            segmentCard(seg)
+                        } else if !events.isEmpty {
+                            eventChips(d)
+                        }
                     }
                     if d.hasMotion {
-                        GCircleView(data: d, t: currentT(d))
+                        GCircleView(data: d, t: currentT(d), segment: segmentSpan(d))
                             .frame(width: 84, height: 84)
                     }
                 }
@@ -326,22 +358,43 @@ struct ReviewView: View {
         .minimumScaleFactor(0.6)
     }
 
+    /// その時刻(UNIX)の 5 秒前から等倍で再生する(出来事・区間を押したとき)
+    private func playFrom(_ d: ReviewData, unix: Double) {
+        let at = d.index(atUnix: unix)
+        let t = max(0, d.samples[at].t - 5)
+        let i = d.index(atT: t)
+        rate = 1
+        playT = t
+        autoCursor = i
+        cursor = i
+        focus = at
+        follow = true
+        playing = true
+    }
+
+    /// いま見ている区間(カーブ・停止・発進)の点数と項目の印
+    private func segmentCard(_ s: EvalSegment) -> some View {
+        HStack(spacing: 6) {
+            Text(s.name).font(.caption.bold())
+            Text(String(format: "%.0f点", s.score)).font(.caption.bold()).monospacedDigit()
+                .foregroundStyle(EvalStyle.color(s.score))
+            Text(SegStyle.marks(s)).font(.caption2)
+            Text(SegStyle.strength(s)).font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+        }
+        .lineLimit(1)
+        .minimumScaleFactor(0.6)
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background(EvalStyle.color(s.score).opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .combine)
+    }
+
     /// 出来事(押すとその 5 秒前から等倍で再生)
     private func eventChips(_ d: ReviewData) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 ForEach(Array(events.enumerated()), id: \.offset) { _, e in
                     Button {
-                        let at = d.index(atUnix: e.tUnix)
-                        let t = max(0, d.samples[at].t - 5)
-                        let i = d.index(atT: t)
-                        rate = 1
-                        playT = t
-                        autoCursor = i
-                        cursor = i
-                        focus = at
-                        follow = true
-                        playing = true
+                        playFrom(d, unix: e.tUnix)
                     } label: {
                         VStack(spacing: 0) {
                             Text(e.kind).font(.caption.bold())
@@ -364,6 +417,8 @@ struct GCircleView: View {
     let data: ReviewData
     /// 開始からの秒(nil なら球を出さない)
     let t: Double?
+    /// いま見ている区間(開始からの秒で始め・終わりと、点数)。あれば尾の代わりに区間の軌跡を点数の色で出す
+    var segment: (from: Double, to: Double, score: Double)? = nil
 
     var body: some View {
         Canvas { ctx, size in
@@ -396,13 +451,21 @@ struct GCircleView: View {
             let now: (lon: Double, lat: Double)
             if let f = data.fine.at(t) {
                 now = (f.lonG, f.latG)
-                let idx = data.fine.range(t - 4, t)
+                // 区間の中(と終わってから少しの間)は、区間の始めから今まで(終わったあとは区間全体)の軌跡を点数の色で。
+                // 丸く一筆で描けているかが見える
+                let from = segment?.from ?? (t - 4)
+                let to = min(t, segment?.to ?? t)
+                let idx = data.fine.range(from, to)
                 if idx.count >= 2 {
                     var trail = Path()
                     trail.move(to: p(data.fine.lonG[idx.lowerBound], data.fine.latG[idx.lowerBound]))
                     for k in idx.dropFirst() { trail.addLine(to: p(data.fine.lonG[k], data.fine.latG[k])) }
-                    trail.addLine(to: p(f.lonG, f.latG))
-                    ctx.stroke(trail, with: .color(ReviewColors.lon.opacity(0.45)), lineWidth: 1.5)
+                    if to >= t { trail.addLine(to: p(f.lonG, f.latG)) }
+                    if let score = segment?.score {
+                        ctx.stroke(trail, with: .color(EvalStyle.color(score).opacity(0.85)), lineWidth: 2)
+                    } else {
+                        ctx.stroke(trail, with: .color(ReviewColors.lon.opacity(0.45)), lineWidth: 1.5)
+                    }
                 }
             } else {
                 // 10 Hz の値がない(古い形のデータ)ときは、間引いた点を使う

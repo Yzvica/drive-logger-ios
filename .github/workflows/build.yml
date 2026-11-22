@@ -15,16 +15,16 @@ jobs:
       - uses: actions/checkout@v4
       - name: 運転評価の計算が Python 版と同じか確かめる
         run: |
-          swiftc -O DriveLogger/Sources/DriveEval.swift DriveLogger/Sources/HandheldEval.swift DriveLogger/Sources/LiveCoach.swift tools/evalcheck/main.swift -o evalcheck
+          swiftc -O DriveLogger/Sources/DriveEval.swift DriveLogger/Sources/SegmentEval.swift DriveLogger/Sources/HandheldEval.swift DriveLogger/Sources/LiveCoach.swift tools/evalcheck/main.swift -o evalcheck
           ./evalcheck tools/evalcheck/fixture tools/evalcheck/expected.json
       - name: 振り返り画面のデータがサンプルの走行から作れるか確かめる
         run: |
-          swiftc -O DriveLogger/Sources/DriveEval.swift DriveLogger/Sources/HandheldEval.swift DriveLogger/Sources/ReviewData.swift tools/reviewcheck/main.swift -o reviewcheck
+          swiftc -O DriveLogger/Sources/DriveEval.swift DriveLogger/Sources/SegmentEval.swift DriveLogger/Sources/HandheldEval.swift DriveLogger/Sources/ReviewData.swift tools/reviewcheck/main.swift -o reviewcheck
           ./reviewcheck tools/evalcheck/fixture
       - name: 同乗の運転評価(固定・手持ちの見分けと手持ちの補正)を確かめる
         run: |
           python3 tools/handcheck/make_fixture.py "$RUNNER_TEMP/handfixture"
-          swiftc -O DriveLogger/Sources/DriveEval.swift DriveLogger/Sources/HandheldEval.swift tools/handcheck/main.swift -o handcheck
+          swiftc -O DriveLogger/Sources/DriveEval.swift DriveLogger/Sources/SegmentEval.swift DriveLogger/Sources/HandheldEval.swift tools/handcheck/main.swift -o handcheck
           ./handcheck "$RUNNER_TEMP/handfixture" tools/evalcheck/fixture
       - name: 記録を分ける処理を確かめる
         run: |

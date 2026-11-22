@@ -1,6 +1,6 @@
 // 同乗の運転評価(手持ち・固定の見分けと、手持ちの方法 HandheldEval.swift)を確かめる(CI の macOS で動かす)
 //   python3 tools/handcheck/make_fixture.py /tmp/handfixture
-//   swiftc -O DriveLogger/Sources/DriveEval.swift DriveLogger/Sources/HandheldEval.swift tools/handcheck/main.swift -o handcheck
+//   swiftc -O DriveLogger/Sources/DriveEval.swift DriveLogger/Sources/SegmentEval.swift DriveLogger/Sources/HandheldEval.swift tools/handcheck/main.swift -o handcheck
 //   ./handcheck /tmp/handfixture tools/evalcheck/fixture
 import Foundation
 

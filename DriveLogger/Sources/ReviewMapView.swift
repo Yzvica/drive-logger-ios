@@ -1,11 +1,13 @@
 import MapKit
 import SwiftUI
 
-/// 振り返りの地図。軌跡を速度で色分けし、出来事のピンと、グラフで選んだ時刻の丸を出す。
+/// 振り返りの地図。軌跡を速度で色分けし、出来事のピン、カーブ・停止・発進の点数の色の丸と、グラフで選んだ時刻の丸を出す。
 /// 軌跡かピンをタップすると onPick(点の位置)を呼ぶ
 struct ReviewMapView: UIViewRepresentable {
     let samples: [ReviewSample]
     let events: [EvalEvent]
+    /// 区間ごとの採点(カーブ・停止・発進)。点数の色の小さな丸を置き、押すと onSegment を呼ぶ
+    var segments: [EvalSegment] = []
     let style: MapStyle
     /// グラフで選んでいる点(nil なら丸を出さない)
     let cursor: Int?
@@ -21,6 +23,8 @@ struct ReviewMapView: UIViewRepresentable {
     var follow: Bool = false
     /// 手で地図を動かしたとき(追尾をやめるため)
     var onUserPan: () -> Void = {}
+    /// 区間の丸を押したとき
+    var onSegment: (EvalSegment) -> Void = { _ in }
     let onPick: (Int) -> Void
 
     /// 速度の色分け(km/h の上限と色)
@@ -62,6 +66,7 @@ struct ReviewMapView: UIViewRepresentable {
 
         applyStyle(map, c)
         drawTrack(map, c)
+        drawSegments(map, c)
         return map
     }
 
@@ -71,6 +76,7 @@ struct ReviewMapView: UIViewRepresentable {
         if c.style != style { applyStyle(map, c) }
         c.zoom.update(map, downIn: zoomDownIn)
         if c.drawnCount != samples.count { drawTrack(map, c) }
+        if c.drawnSegments != segments { drawSegments(map, c) }
 
         let dotCoord = playPosition ?? cursor.flatMap { i in
             samples.indices.contains(i) ? CLLocationCoordinate2D(latitude: samples[i].lat, longitude: samples[i].lon) : nil
@@ -139,6 +145,23 @@ struct ReviewMapView: UIViewRepresentable {
         c.credit?.isHidden = style.gsiTemplate == nil
     }
 
+    /// 区間ごとの採点の丸(評価を計算し直したときは置き直す)
+    private func drawSegments(_ map: MKMapView, _ c: Coordinator) {
+        map.removeAnnotations(c.segPins)
+        c.segPins = []
+        c.drawnSegments = segments
+        for (k, sg) in segments.enumerated() {
+            let pin = SegmentAnnotation()
+            pin.coordinate = CLLocationCoordinate2D(latitude: sg.lat, longitude: sg.lon)
+            pin.title = "\(sg.name) \(String(format: "%.0f", sg.score))点"
+            pin.subtitle = "\(Display.time.string(from: Date(timeIntervalSince1970: sg.tUnix)))・\(SegStyle.marks(sg))"
+            pin.segmentIndex = k
+            pin.score = sg.score
+            c.segPins.append(pin)
+        }
+        map.addAnnotations(c.segPins)
+    }
+
     /// 同じ色が続く区間を 1 本の線にする(線の数を減らして軽くする)
     private func drawTrack(_ map: MKMapView, _ c: Coordinator) {
         map.removeOverlays(c.lines)
@@ -187,6 +210,11 @@ struct ReviewMapView: UIViewRepresentable {
         var eventIndex = 0
     }
 
+    final class SegmentAnnotation: MKPointAnnotation {
+        var segmentIndex = 0
+        var score = 0.0
+    }
+
     final class CursorAnnotation: MKPointAnnotation {}
 
     final class Coordinator: NSObject, MKMapViewDelegate, UIGestureRecognizerDelegate {
@@ -197,6 +225,8 @@ struct ReviewMapView: UIViewRepresentable {
         var style: MapStyle?
         var lines: [BandPolyline] = []
         var pins: [EventAnnotation] = []
+        var segPins: [SegmentAnnotation] = []
+        var drawnSegments: [EvalSegment] = []
         var dot: CursorAnnotation?
         var drawnCount = -1
         var focused: Int?
@@ -274,6 +304,22 @@ struct ReviewMapView: UIViewRepresentable {
                 orient(v, heading: parent.heading, map: mapView)
                 return v
             }
+            if let seg = annotation as? SegmentAnnotation {
+                // 点数の色の小さな丸。重なったら出来事のピンや自車の丸を優先して隠れる
+                let id = "segment"
+                let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) ?? MKAnnotationView(annotation: annotation, reuseIdentifier: id)
+                v.annotation = annotation
+                let size: CGFloat = 12
+                v.frame = CGRect(x: 0, y: 0, width: size, height: size)
+                v.layer.cornerRadius = size / 2
+                v.layer.borderWidth = 1.5
+                v.layer.borderColor = UIColor.white.cgColor
+                v.backgroundColor = UIColor(EvalStyle.color(seg.score))
+                v.canShowCallout = true
+                v.displayPriority = .defaultLow
+                v.collisionMode = .circle
+                return v
+            }
             if annotation is EventAnnotation {
                 let id = "event"
                 let v = (mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView)
@@ -289,6 +335,10 @@ struct ReviewMapView: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
+            if let seg = view.annotation as? SegmentAnnotation, parent.segments.indices.contains(seg.segmentIndex) {
+                parent.onSegment(parent.segments[seg.segmentIndex])
+                return
+            }
             guard let pin = view.annotation as? EventAnnotation, parent.events.indices.contains(pin.eventIndex) else { return }
             let e = parent.events[pin.eventIndex]
             let i = ReviewData(samples: parent.samples, hasMotion: false, hasAltitude: false, altitudeFromPressure: false)
