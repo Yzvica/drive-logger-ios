@@ -8,6 +8,8 @@ struct ContentView: View {
                     .tabItem { Label("記録", systemImage: "record.circle") }
                 LogsView()
                     .tabItem { Label("ログ", systemImage: "list.bullet") }
+                NaviView()
+                    .tabItem { Label("ナビ", systemImage: "arrow.triangle.turn.up.right.diamond") }
                 InfoView()
                     .tabItem { Label("情報", systemImage: "cloud.sun") }
                 SettingsView()
