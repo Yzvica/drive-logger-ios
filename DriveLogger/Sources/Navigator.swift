@@ -140,6 +140,8 @@ final class Navigator: NSObject, ObservableObject, CLLocationManagerDelegate, AV
     @Published private(set) var detourLine: NaviLine?
     @Published private(set) var banner = NaviBanner()
     @Published private(set) var location: CLLocation?
+    /// 現在地の住所(「愛知県豊田市足助町」など。Apple の住所検索で、300m 動くか 2 分ごとに取り直す)
+    @Published private(set) var address = ""
     /// 声を出さない
     @Published var muted = false {
         didSet { if muted { queue.async { self.synth.stopSpeaking(at: .immediate) } } }
@@ -165,6 +167,9 @@ final class Navigator: NSObject, ObservableObject, CLLocationManagerDelegate, AV
     private var freeRequested = Set<Int>()
     private var timer: Timer?
     private var spoke = false
+    private let geocoder = CLGeocoder()
+    private var geocodedAt: CLLocation?
+    private var geocodedTime = Date.distantPast
 
     private override init() {
         super.init()
@@ -187,6 +192,8 @@ final class Navigator: NSObject, ObservableObject, CLLocationManagerDelegate, AV
         detourLine = nil
         freeRequested = []
         spoke = false
+        address = ""
+        geocodedAt = nil
         banner = NaviBanner(remaining: NaviSpeech.label(line.length))
         active = true
         if manager.authorizationStatus == .notDetermined { manager.requestWhenInUseAuthorization() }
@@ -219,6 +226,7 @@ final class Navigator: NSObject, ObservableObject, CLLocationManagerDelegate, AV
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard active, let loc = locations.last, loc.horizontalAccuracy >= 0, loc.horizontalAccuracy <= 100, let engine else { return }
         location = loc
+        updateAddress(loc)
         let p = GeoPoint(lat: loc.coordinate.latitude, lon: loc.coordinate.longitude)
         let heading: Double? = loc.course >= 0 ? loc.course : nil
         let t = loc.timestamp.timeIntervalSince1970
@@ -242,6 +250,27 @@ final class Navigator: NSObject, ObservableObject, CLLocationManagerDelegate, AV
         }
         say(says)
         updateBanner()
+    }
+
+    /// 住所を取り直す。初回・300m 以上動いて 20 秒たった・2 分たった、のどれかのとき(Apple の回数制限に当たらないよう間をあける)
+    private func updateAddress(_ loc: CLLocation) {
+        guard !geocoder.isGeocoding else { return }
+        let since = Date().timeIntervalSince(geocodedTime)
+        if let last = geocodedAt, !(since >= 120 || (since >= 20 && loc.distance(from: last) >= 300)) { return }
+        geocodedAt = loc
+        geocodedTime = Date()
+        geocoder.reverseGeocodeLocation(loc, preferredLocale: Locale(identifier: "ja_JP")) { [weak self] marks, _ in
+            guard let m = marks?.first else { return }
+            var parts: [String] = []
+            for p in [m.administrativeArea, m.locality, m.subLocality, m.thoroughfare] {
+                if let p, !p.isEmpty, !parts.contains(p) { parts.append(p) }
+            }
+            let text = parts.joined()
+            DispatchQueue.main.async {
+                guard let self, self.active, !text.isEmpty else { return }
+                self.address = text
+            }
+        }
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {

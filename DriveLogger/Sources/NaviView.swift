@@ -147,6 +147,10 @@ struct NaviRunView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("残り \(b.remaining)").font(.headline).monospacedDigit()
                     Text(b.detour ? "Apple の経路で案内中" : b.current).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    if !navi.address.isEmpty {
+                        Label(navi.address, systemImage: "mappin.and.ellipse")
+                            .font(.caption).lineLimit(1).minimumScaleFactor(0.8)
+                    }
                 }
                 Spacer()
                 Button {
