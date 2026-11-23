@@ -214,7 +214,8 @@ final class Recorder: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// 記録中で「記録中は画面を消さない」がオンのときだけ、画面の自動ロックを止める
     func updateIdleTimer() {
-        let on = isRecording && AppSettings.shared.keepScreenOn
+        // ナビの案内中も画面を消さない
+        let on = (isRecording && AppSettings.shared.keepScreenOn) || Navigator.shared.active
         DispatchQueue.main.async { UIApplication.shared.isIdleTimerDisabled = on }
     }
 
