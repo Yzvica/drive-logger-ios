@@ -19,6 +19,7 @@ check("距離 1.5km", NaviSpeech.distance(1500) == "1.5キロ", NaviSpeech.dista
 check("距離 2km", NaviSpeech.distance(2000) == "2キロ", NaviSpeech.distance(2000))
 check("距離 300m", NaviSpeech.distance(310) == "300メートル", NaviSpeech.distance(310))
 check("距離 120m", NaviSpeech.distance(120) == "100メートル", NaviSpeech.distance(120))
+check("名前の重なり", NaviSpeech.clean("左折、神奈川県道40号神奈川県道40号横浜厚木線") == "左折、神奈川県道40号横浜厚木線" && NaviSpeech.clean("国道1号") == "国道1号", NaviSpeech.clean("左折、神奈川県道40号神奈川県道40号横浜厚木線"))
 check("角度の差", angleDiff(10, 350) == 20 && angleDiff(350, 10) == -20, "\(angleDiff(10, 350))")
 
 /// 線から右へ side m ずらした点
@@ -94,6 +95,48 @@ for name in ["exp", "free"] {
         let tun = drive(line, v: 20, noGps: (s.at - 2500)...(s.at + 500))
         let got = tun.said.first { $0.1.contains("まもなく") && $0.1.contains(s.text) }
         check("\(name) トンネル", got != nil && abs(got!.0 - s.at) < 300, "\(s.text) を \(got.map { Int($0.0) } ?? -1) m で(案内は \(Int(s.at)) m)")
+    }
+}
+
+// 出発と到着が同じ周回コース(行きの道をそのまま戻る往復で、いちばん取り違えやすい形)
+if let data = try? Data(contentsOf: URL(fileURLWithPath: args[1]).appendingPathComponent("exp.json")),
+   let g = try? JSONDecoder().decode(NaviGuideData.self, from: data), let base = NaviLine(guide: g) {
+    // 先頭 30km を往復にする
+    let half = 30_000.0
+    var pts: [GeoPoint] = []
+    var m = 0.0
+    while m < half { pts.append(base.point(at: m)); m += 50 }
+    let back = Array(pts.reversed().dropFirst())
+    pts += back
+    var steps = base.steps.filter { $0.kind != "arrive" && $0.at < half - 100 }
+    let loopLen = NaviLine(pts: pts, steps: []).length
+    steps.append(NaviLine.Step(at: loopLen, kind: "arrive", angle: 0, text: "目的地", road: ""))
+    let loop = NaviLine(pts: pts, steps: steps)
+
+    // 家の前(出発点 = 到着点)で止まったまま位置を受け取る
+    let e = NaviEngine(line: loop)
+    var said: [String] = []
+    for t in 0..<20 { said += e.update(offset(loop, 0, Double(t % 5) - 2), speed: 0, heading: nil, hAcc: 10, time: Double(t)) }
+    check("周回 出発点で到着にしない", !e.arrived && (e.progress ?? 1e9) < 100, "progress \(Int(e.progress ?? -1)) m / \(said.joined(separator: " | "))")
+
+    // そのまま一周すると、最後に到着する
+    let r = drive(loop, v: 15)
+    check("周回 一周して到着", r.engine.arrived && (r.said.last?.0 ?? 0) > loopLen - 200, "\(Int(r.said.last?.0 ?? -1)) m / \(Int(loopLen)) m")
+
+    // 最初に古い位置(コースの途中)が来てから出発点で走り出しても、最初の案内を読む
+    let e2 = NaviEngine(line: loop)
+    var said2: [String] = []
+    said2 += e2.update(loop.point(at: half * 0.8), speed: 0, heading: nil, hAcc: 10, time: 0)
+    var t2 = 1.0
+    var m2 = 0.0
+    if let first = steps.first(where: { $0.kind != "arrive" }) {
+        while m2 < first.at + 100 {
+            let br = geoBearing(loop.point(at: max(0, m2 - 10)), loop.point(at: m2 + 10))
+            said2 += e2.update(offset(loop, m2, 0), speed: 15, heading: br, hAcc: 8, time: t2)
+            t2 += 1
+            m2 += 15
+        }
+        check("位置が戻ったら案内を言い直す", said2.contains { $0.contains(first.text) }, said2.joined(separator: " | "))
     }
 }
 exit(failed ? 1 : 0)

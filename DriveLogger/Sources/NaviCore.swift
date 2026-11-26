@@ -110,11 +110,11 @@ struct NaviLine {
         var acc: [Double] = [0]
         for j in pts.indices.dropFirst() { acc.append(acc[j - 1] + geoDistance(pts[j - 1], pts[j])) }
         let at = { (i: Int) -> Double in acc[max(0, min(acc.count - 1, i))] }
-        let steps = g.man.map { Step(at: at($0.i), kind: $0.kind, angle: $0.angle, text: $0.text, road: $0.road) }
+        let steps = g.man.map { Step(at: at($0.i), kind: $0.kind, angle: $0.angle, text: NaviSpeech.clean($0.text), road: NaviSpeech.clean($0.road)) }
         let ranges = { (list: [[Int]]) -> [ClosedRange<Double>] in
             list.compactMap { r -> ClosedRange<Double>? in r.count == 2 && at(r[0]) <= at(r[1]) ? at(r[0])...at(r[1]) : nil }
         }
-        self.init(pts: pts, steps: steps, roads: g.roads.map { (at: at($0.i), name: $0.name) }, free: ranges(g.free), exp: ranges(g.exp))
+        self.init(pts: pts, steps: steps, roads: g.roads.map { (at: at($0.i), name: NaviSpeech.clean($0.name)) }, free: ranges(g.free), exp: ranges(g.exp))
     }
 
     /// 線の最初から m の位置
@@ -148,12 +148,15 @@ struct NaviLine {
         var off: Double
     }
 
-    /// 位置に近い線上の点。near(前回の距離)があればその前後を先に探し、heading(進む向き)と逆向きの所は避ける
+    /// 位置に近い線上の点。near(前回の距離)があればその前後を先に探し、heading(進む向き)と逆向きの所は避ける。
+    /// near がない(最初の位置)ときは、いちばん近い所と大差ない(+40m 以内)なかでいちばん手前を選ぶ。
+    /// 出発と到着が同じ周回コースで、家の前で始めたのに到着の所と取り違えないように
     func match(_ p: GeoPoint, heading: Double?, near: Double?) -> Match? {
         guard pts.count >= 2 else { return nil }
         let cosLat = cos(p.lat * .pi / 180)
-        func search(_ range: Range<Int>) -> (Match, Double)? {
+        func search(_ range: Range<Int>, earliest: Bool = false) -> (Match, Double)? {
             var best: (Match, Double)?
+            var cands: [(Match, Double)] = []
             for k in range {
                 let a = pts[k], b = pts[k + 1]
                 let ax = (a.lon - p.lon) * 111_320 * cosLat, ay = (a.lat - p.lat) * 110_950
@@ -167,9 +170,14 @@ struct NaviLine {
                     let segBearing = atan2(dx, dy) * 180 / .pi
                     if abs(angleDiff(h, segBearing)) > 100 { score += 150 }
                 }
-                if best == nil || score < best!.1 {
-                    best = (Match(at: acc[k] + t * (acc[k + 1] - acc[k]), off: off), score)
-                }
+                let m = Match(at: acc[k] + t * (acc[k + 1] - acc[k]), off: off)
+                if earliest { cands.append((m, score)) }
+                if best == nil || score < best!.1 { best = (m, score) }
+            }
+            if earliest, let b = best {
+                var pick = b
+                for c in cands where c.1 <= b.1 + 40 && c.0.at < pick.0.at { pick = c }
+                return pick
             }
             return best
         }
@@ -182,12 +190,17 @@ struct NaviLine {
             while hi < segs && acc[hi] <= n + 3000 { hi += 1 }
             if hi > lo, let r = search(lo..<hi), r.1 < 60 { return r.0 }
         }
-        return search(0..<segs)?.0
+        return search(0..<segs, earliest: near == nil)?.0
     }
 }
 
 /// 読み上げの文に使う距離
 enum NaviSpeech {
+    /// 道の名前が2回続くもの(「神奈川県道40号神奈川県道40号横浜厚木線」。都道府県道のデータの名前にある)を1回にする
+    static func clean(_ text: String) -> String {
+        text.replacingOccurrences(of: "([^、]+?[都道府県]道[0-9]+号)\\1", with: "$1", options: .regularExpression)
+    }
+
     static func distance(_ m: Double) -> String {
         if m >= 950 {
             let km = (m / 500).rounded() / 2
@@ -230,6 +243,8 @@ final class NaviEngine {
     private var lastFix: Double?
     private var lastSpeed: Double = 0
     private var lastProgressAtFix: Double = 0
+    /// 案内を始めてからいちばん手前にいた所(線の最初からの距離 m)
+    private var startAt: Double?
 
     init(line: NaviLine, isDetour: Bool = false) {
         self.line = line
@@ -282,6 +297,7 @@ final class NaviEngine {
         }
         // 外れているあいだは位置を進めない(戻ったところから続ける)。ただし大きく先へ進んだ所で戻ったときはそこから
         if offRoute { return out }
+        startAt = min(startAt ?? m.at, m.at)
         progress = m.at
         lastFix = time
         lastSpeed = max(0, speed)
@@ -303,6 +319,12 @@ final class NaviEngine {
     private func announce(speed v: Double) -> [String] {
         guard let p = progress, !arrived else { return [] }
         var out: [String] = []
+        // 位置が大きく戻ったとき(トンネルで進みすぎた・最初の位置が違った)は、まだ先の案内を言い直せるよう戻す
+        while nextIndex > 0 && line.steps[nextIndex - 1].at > p + 100 {
+            nextIndex -= 1
+            said[nextIndex] = 0
+            cruiseSaid.remove(nextIndex)
+        }
         // 通り過ぎた案内を飛ばす
         while nextIndex < line.steps.count && line.steps[nextIndex].at < p - 15 && line.steps[nextIndex].kind != "arrive" {
             nextIndex += 1
@@ -310,7 +332,9 @@ final class NaviEngine {
         guard nextIndex < line.steps.count else { return out }
         let s = line.steps[nextIndex]
         let d = s.at - p
-        if s.kind == "arrive" && d < 25 {
+        // 始めた所から 300m(短い線は半分)進むまでは着いたことにしない(周回コースを家の前で始めたとき)
+        let moved = p - (startAt ?? 0) >= min(300, line.length / 2)
+        if s.kind == "arrive" && d < 25 && moved {
             arrived = true
             out.append(isDetour ? "" : "目的地に到着しました。案内を終わります")
             return out.filter { !$0.isEmpty }
