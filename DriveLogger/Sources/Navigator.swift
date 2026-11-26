@@ -225,6 +225,8 @@ final class Navigator: NSObject, ObservableObject, CLLocationManagerDelegate, AV
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard active, let loc = locations.last, loc.horizontalAccuracy >= 0, loc.horizontalAccuracy <= 100, let engine else { return }
+        // 始めたときに来る古い位置(前に止めた所など)は使わない
+        guard loc.timestamp.timeIntervalSinceNow > -15 else { return }
         location = loc
         updateAddress(loc)
         let p = GeoPoint(lat: loc.coordinate.latitude, lon: loc.coordinate.longitude)
@@ -298,7 +300,7 @@ final class Navigator: NSObject, ObservableObject, CLLocationManagerDelegate, AV
         guard let p = engine.progress else { return }
         // 一般道の区間の 700m 手前(短い区間は直線のままでも迷わないので頼まない)
         if let f = course.free.first(where: { $0.upperBound - $0.lowerBound > 300 && $0.lowerBound - p < 700 && $0.upperBound > p + 50 }),
-           !freeRequested.contains(Int(f.lowerBound)) {
+           !freeRequested.contains(Int(f.lowerBound)), Date().timeIntervalSince(lastRequest) > 20 {
             freeRequested.insert(Int(f.lowerBound))
             requestDetour(.free(f))
         }
@@ -344,6 +346,8 @@ final class Navigator: NSObject, ObservableObject, CLLocationManagerDelegate, AV
                 guard self.active else { return }
                 guard let route = res?.routes.first else {
                     NSLog("Apple の経路を取れません: \(String(describing: err))")
+                    // 一般道の区間は、電波が戻ったら頼み直す(20 秒おき)
+                    if case .free(let f) = kind { self.freeRequested.remove(Int(f.lowerBound)) }
                     if case .back = kind { self.say(["戻る道を探せませんでした。コースに向かってください"]) }
                     return
                 }
