@@ -210,6 +210,13 @@ enum NaviSpeech {
         return "\(Int(max(step, (m / step).rounded() * step)))メートル"
     }
 
+    /// 方角(北・北東…)
+    static func compass(_ bearing: Double) -> String {
+        let names = ["北", "北東", "東", "南東", "南", "南西", "西", "北西"]
+        let k = Int(((bearing.truncatingRemainder(dividingBy: 360) + 360 + 22.5) / 45).rounded(.down)) % 8
+        return names[k]
+    }
+
     /// 画面に出す距離
     static func label(_ m: Double) -> String {
         if m >= 1000 { return String(format: m >= 10_000 ? "%.0f km" : "%.1f km", m / 1000) }
@@ -233,6 +240,10 @@ final class NaviEngine {
     private(set) var arrived = false
     /// 次の案内(steps の添字)
     private(set) var nextIndex = 0
+    /// コースに乗ったか。始めたときにコースから離れている(家がスタート地点から遠い)あいだは false で、案内はしない
+    private(set) var joined: Bool
+    /// コースに乗る前の、いちばん近いコースの所
+    private(set) var approach: NaviLine.Match?
 
     /// 案内ごとに読み上げた段階(0 = まだ、1 = 遠く、2 = 近く、3 = まもなく)
     private var said: [Int]
@@ -249,6 +260,7 @@ final class NaviEngine {
     init(line: NaviLine, isDetour: Bool = false) {
         self.line = line
         self.isDetour = isDetour
+        joined = isDetour
         said = Array(repeating: 0, count: line.steps.count)
     }
 
@@ -263,10 +275,15 @@ final class NaviEngine {
 
     /// 案内を始めるときの文
     func startText() -> String {
-        guard let s = line.steps.first(where: { $0.kind != "arrive" }) ?? line.steps.first else { return "" }
-        let d = max(0, s.at - (progress ?? 0))
-        if s.kind == "arrive" { return "目的地まで\(NaviSpeech.distance(d))です" }
-        return "最初の案内は\(NaviSpeech.distance(d))先、\(s.text)です"
+        let p = progress ?? 0
+        guard let s = line.steps.first(where: { $0.kind != "arrive" && $0.at > p + 15 }) ?? line.steps.last else { return "" }
+        let d = max(0, s.at - p)
+        // 最初にどちらへ進むか(周回コースは行きと帰りの線が近くて分かりにくいので、方角と道の名前で言う)
+        let dir = NaviSpeech.compass(geoBearing(line.point(at: p), line.point(at: p + 300)))
+        let road = line.road(at: p)
+        let head = road.isEmpty || road == "一般道" ? "\(dir)へ進みます。" : "\(road)を\(dir)へ進みます。"
+        if s.kind == "arrive" { return head + "目的地まで\(NaviSpeech.distance(d))です" }
+        return head + "最初の案内は\(NaviSpeech.distance(d))先、\(s.text)です"
     }
 
     /// 位置が来たとき。speed は m/s(わからなければ負)、heading は進む向き(度、わからなければ nil)、hAcc は位置の誤差(m)、time は秒
@@ -278,6 +295,15 @@ final class NaviEngine {
         let free = line.inFree(m.at) != nil
         // 外れたか: 誤差を見込んで 45m より離れた状態が 5 秒続いたら(一般道の区間は直線なので見ない)
         let offLimit = max(45, min(hAcc, 60) * 1.5)
+        // コースに乗るまでは、近いコースの所を覚えるだけ(外れた・道なりなどは言わない)。一般道の区間は直線なので広めに見る
+        if !joined {
+            if m.off > (free ? 300 : offLimit + 15) {
+                approach = m
+                return out
+            }
+            joined = true
+            approach = nil
+        }
         if !isDetour {
             if m.off > offLimit && !free && speed > 1 {
                 onSince = nil

@@ -140,7 +140,7 @@ struct NaviRunView: View {
             .foregroundStyle(.white)
             .background(b.offRoute ? Color.red : b.detour ? Color.purple : Color(red: 0.05, green: 0.45, blue: 0.25))
 
-            NaviMapView(course: navi.course, detour: navi.detourLine, location: navi.location, zoomDownIn: AppSettings.shared.oneFingerZoomDownIn)
+            NaviMapView(course: navi.course, detour: navi.detourLine, ahead: navi.ahead, location: navi.location, zoomDownIn: AppSettings.shared.oneFingerZoomDownIn)
                 .ignoresSafeArea(edges: .horizontal)
 
             HStack(spacing: 12) {
@@ -181,6 +181,8 @@ struct NaviRunView: View {
 struct NaviMapView: UIViewRepresentable {
     var course: NaviLine?
     var detour: NaviLine?
+    /// これから進むコースの先(黄色で描き、向きの矢印を置く)
+    var ahead: [GeoPoint] = []
     var location: CLLocation?
     var zoomDownIn: Bool
 
@@ -238,7 +240,50 @@ struct NaviMapView: UIViewRepresentable {
                 map.addOverlay(line, level: .aboveRoads)
             }
         }
+        let aheadKey = ahead.first.map { "\($0.lat),\($0.lon),\(ahead.count)" } ?? ""
+        if aheadKey != c.aheadKey {
+            c.aheadKey = aheadKey
+            if let old = c.aheadLine { map.removeOverlay(old) }
+            c.aheadLine = nil
+            map.removeAnnotations(c.arrows)
+            c.arrows = []
+            if ahead.count >= 2 {
+                let line = NaviMapView.polyline(ahead)
+                line.title = "ahead"
+                c.aheadLine = line
+                map.addOverlay(line, level: .aboveLabels)
+                // 進む向きの矢印(先 3km の線に 400m おき)
+                var k = 4
+                while k + 1 < ahead.count {
+                    let a = ArrowAnnotation()
+                    a.coordinate = CLLocationCoordinate2D(latitude: ahead[k].lat, longitude: ahead[k].lon)
+                    a.bearing = geoBearing(ahead[k - 1], ahead[k + 1])
+                    c.arrows.append(a)
+                    k += 8
+                }
+                map.addAnnotations(c.arrows)
+            }
+        }
+        // スタート地点の旗
+        let start = course?.pts.first
+        if start != c.startPoint {
+            c.startPoint = start
+            if let old = c.startMark { map.removeAnnotation(old) }
+            c.startMark = nil
+            if let start {
+                let mark = MKPointAnnotation()
+                mark.coordinate = CLLocationCoordinate2D(latitude: start.lat, longitude: start.lon)
+                mark.title = "スタート"
+                c.startMark = mark
+                map.addAnnotation(mark)
+            }
+        }
         if let loc = location { c.follow(map, loc) }
+    }
+
+    /// コースの進む向きの矢印
+    final class ArrowAnnotation: MKPointAnnotation {
+        var bearing: Double = 0
     }
 
     private static func polyline(_ pts: [GeoPoint]) -> MKPolyline {
@@ -256,6 +301,11 @@ struct NaviMapView: UIViewRepresentable {
         var detourKey = ""
         var courseLine: MKPolyline?
         var detourLine: MKPolyline?
+        var aheadKey = ""
+        var aheadLine: MKPolyline?
+        var arrows: [ArrowAnnotation] = []
+        var startPoint: GeoPoint?
+        var startMark: MKPointAnnotation?
         var following = true
         var zoomedIn = false
         var lastCourse: CLLocationDirection = 0
@@ -270,6 +320,9 @@ struct NaviMapView: UIViewRepresentable {
             if line.title == "detour" {
                 r.strokeColor = UIColor.systemPurple
                 r.lineWidth = 7
+            } else if line.title == "ahead" {
+                r.strokeColor = UIColor.systemYellow
+                r.lineWidth = 9
             } else {
                 r.strokeColor = UIColor.systemBlue.withAlphaComponent(0.75)
                 r.lineWidth = 7
@@ -277,6 +330,36 @@ struct NaviMapView: UIViewRepresentable {
             r.lineCap = .round
             r.lineJoin = .round
             return r
+        }
+
+        func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            if let a = annotation as? ArrowAnnotation {
+                let id = "arrow"
+                let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) ?? MKAnnotationView(annotation: a, reuseIdentifier: id)
+                v.annotation = a
+                let conf = UIImage.SymbolConfiguration(pointSize: 18, weight: .black)
+                v.image = UIImage(systemName: "arrowtriangle.up.fill", withConfiguration: conf)?.withTintColor(.black, renderingMode: .alwaysOriginal)
+                v.canShowCallout = false
+                v.transform = CGAffineTransform(rotationAngle: (a.bearing - mapView.camera.heading) * .pi / 180)
+                return v
+            }
+            if annotation is MKPointAnnotation {
+                let id = "start"
+                let v = (mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView) ?? MKMarkerAnnotationView(annotation: annotation, reuseIdentifier: id)
+                v.annotation = annotation
+                v.markerTintColor = .systemGreen
+                v.glyphImage = UIImage(systemName: "flag.fill")
+                v.displayPriority = .required
+                return v
+            }
+            return nil
+        }
+
+        /// 地図が回ったら、矢印をコースの向きに合わせ直す
+        func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
+            for a in arrows {
+                mapView.view(for: a)?.transform = CGAffineTransform(rotationAngle: (a.bearing - mapView.camera.heading) * .pi / 180)
+            }
         }
 
         @objc func tapFollow() {

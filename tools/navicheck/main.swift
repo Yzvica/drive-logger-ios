@@ -139,4 +139,25 @@ if let data = try? Data(contentsOf: URL(fileURLWithPath: args[1]).appendingPathC
         check("位置が戻ったら案内を言い直す", said2.contains { $0.contains(first.text) }, said2.joined(separator: " | "))
     }
 }
+
+// 始めたときにコースから 2km 離れている(家がスタート地点から遠い): コースに乗るまでは案内しない・外れたと言わない
+if let data = try? Data(contentsOf: URL(fileURLWithPath: args[1]).appendingPathComponent("free.json")),
+   let g = try? JSONDecoder().decode(NaviGuideData.self, from: data), let line = NaviLine(guide: g) {
+    let e = NaviEngine(line: line)
+    var said: [String] = []
+    // コースのどこからも 500m 以上離れた、スタート地点のそばの所
+    let far = [2000.0, -2000, 3000, -3000, 5000, -5000].map { offset(line, 0, $0) }
+        .first { (line.match($0, heading: nil, near: nil)?.off ?? 0) > 500 } ?? offset(line, 0, 2000)
+    // 止まったまま、そのあと 20 秒走る(まだコースから離れている)
+    for t in 0..<40 {
+        let v: Double = t < 20 ? 0 : 10
+        said += e.update(far, speed: v, heading: 0, hAcc: 10, time: Double(t))
+    }
+    check("離れて開始 案内しない", !e.joined && e.progress == nil && e.approach != nil && said.isEmpty, "approach \(Int(e.approach?.off ?? -1)) m / \(said.joined(separator: " | "))")
+    // スタート地点に着いたらコースに乗る
+    said += e.update(offset(line, 0, 5), speed: 5, heading: nil, hAcc: 10, time: 40)
+    let st = e.startText()
+    check("離れて開始 スタートで乗る", e.joined && (e.progress ?? 1e9) < 50 && !e.offRoute && st.contains("へ進みます"), st)
+    check("方角", NaviSpeech.compass(0) == "北" && NaviSpeech.compass(44) == "北東" && NaviSpeech.compass(-100) == "西" && NaviSpeech.compass(179) == "南", NaviSpeech.compass(-100))
+}
 exit(failed ? 1 : 0)
