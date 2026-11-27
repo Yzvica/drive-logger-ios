@@ -138,6 +138,8 @@ final class Navigator: NSObject, ObservableObject, CLLocationManagerDelegate, AV
     @Published private(set) var course: NaviLine?
     /// Apple の経路(コースに戻る道・一般道の区間)
     @Published private(set) var detourLine: NaviLine?
+    /// これから進むコースの先 3km(地図で目立たせて、どちら向きに進むかわかるようにする)
+    @Published private(set) var ahead: [GeoPoint] = []
     @Published private(set) var banner = NaviBanner()
     @Published private(set) var location: CLLocation?
     /// 現在地の住所(「愛知県豊田市足助町」など。Apple の住所検索で、300m 動くか 2 分ごとに取り直す)
@@ -152,6 +154,8 @@ final class Navigator: NSObject, ObservableObject, CLLocationManagerDelegate, AV
         case back
         /// 一般道の区間(コースの距離の範囲)
         case free(ClosedRange<Double>)
+        /// 始めたときにコースから離れているので、スタート地点(コースの距離 m の所)まで行く
+        case toStart(Double)
     }
 
     private let manager = CLLocationManager()
@@ -167,6 +171,10 @@ final class Navigator: NSObject, ObservableObject, CLLocationManagerDelegate, AV
     private var freeRequested = Set<Int>()
     private var timer: Timer?
     private var spoke = false
+    /// スタート地点までの道を探せなかったと言ったか(何度も言わない)
+    private var toStartFailSaid = false
+    /// ahead を作ったときのコースの距離
+    private var aheadFrom: Double?
     private let geocoder = CLGeocoder()
     private var geocodedAt: CLLocation?
     private var geocodedTime = Date.distantPast
@@ -191,6 +199,9 @@ final class Navigator: NSObject, ObservableObject, CLLocationManagerDelegate, AV
         detourKind = nil
         detourLine = nil
         freeRequested = []
+        toStartFailSaid = false
+        aheadFrom = nil
+        ahead = []
         spoke = false
         address = ""
         geocodedAt = nil
@@ -217,6 +228,8 @@ final class Navigator: NSObject, ObservableObject, CLLocationManagerDelegate, AV
         detourKind = nil
         detourLine = nil
         course = nil
+        ahead = []
+        aheadFrom = nil
         Recorder.shared.updateIdleTimer()
         if !silent { say(["案内を終わります"]) }
     }
@@ -233,11 +246,6 @@ final class Navigator: NSObject, ObservableObject, CLLocationManagerDelegate, AV
         let heading: Double? = loc.course >= 0 ? loc.course : nil
         let t = loc.timestamp.timeIntervalSince1970
         var says = engine.update(p, speed: loc.speed, heading: heading, hAcc: loc.horizontalAccuracy, time: t)
-        if !spoke, engine.progress != nil {
-            // 最初に位置がわかったら、最初の案内まで言う
-            spoke = true
-            says.insert(engine.startText(), at: 0)
-        }
         if let d = detour {
             let ds = d.update(p, speed: loc.speed, heading: heading, hAcc: loc.horizontalAccuracy, time: t)
             // Apple の経路で案内しているあいだは、コースの案内は「戻りました」「到着」だけ言う
@@ -249,6 +257,11 @@ final class Navigator: NSObject, ObservableObject, CLLocationManagerDelegate, AV
             }
         } else {
             planDetour()
+        }
+        if !spoke, engine.progress != nil {
+            // コースに乗ったら、進む向きと最初の案内まで言う(Apple の経路の案内のあとでも言う)
+            spoke = true
+            says.insert(engine.startText(), at: 0)
         }
         say(says)
         updateBanner()
@@ -293,6 +306,11 @@ final class Navigator: NSObject, ObservableObject, CLLocationManagerDelegate, AV
     /// コースから外れた・一般道の区間が近いときに、Apple の経路を頼む
     private func planDetour() {
         guard let engine, let course, !requesting else { return }
+        // 始めたときにコースから離れている: スタート地点(遠くから途中で始め直したときは、近いコースの所)まで Apple の経路で
+        if !engine.joined, let a = engine.approach {
+            if Date().timeIntervalSince(lastRequest) > 30 { requestDetour(.toStart(Navigator.joinTarget(course, a, location))) }
+            return
+        }
         if engine.offRoute {
             if Date().timeIntervalSince(lastRequest) > 30 { requestDetour(.back) }
             return
@@ -306,6 +324,14 @@ final class Navigator: NSObject, ObservableObject, CLLocationManagerDelegate, AV
         }
     }
 
+    /// コースに乗る所。スタート地点が 20km 以内か、近いコースの所がコースの最初の 5km ならスタート地点。
+    /// それより先(翌日に途中から始め直した)なら、近いコースの所
+    static func joinTarget(_ course: NaviLine, _ a: NaviLine.Match, _ loc: CLLocation?) -> Double {
+        guard let loc, let first = course.pts.first else { return 0 }
+        let here = GeoPoint(lat: loc.coordinate.latitude, lon: loc.coordinate.longitude)
+        return a.at < 5000 || geoDistance(here, first) < 20_000 ? 0 : a.at
+    }
+
     private func checkDetourEnd() {
         guard let engine, let d = detour, let k = detourKind else { return }
         var done = d.arrived
@@ -314,6 +340,8 @@ final class Navigator: NSObject, ObservableObject, CLLocationManagerDelegate, AV
             if !engine.offRoute { done = true }
         case .free(let f):
             if !engine.offRoute, let p = engine.progress, p >= f.upperBound - 30 { done = true }
+        case .toStart:
+            if engine.joined { done = true }
         }
         if done {
             detour = nil
@@ -331,6 +359,8 @@ final class Navigator: NSObject, ObservableObject, CLLocationManagerDelegate, AV
             target = course.point(at: min(course.length, (engine.progress ?? 0) + 300))
         case .free(let f):
             target = course.point(at: min(course.length, f.upperBound + 50))
+        case .toStart(let at):
+            target = course.point(at: at)
         }
         requesting = true
         lastRequest = Date()
@@ -349,6 +379,10 @@ final class Navigator: NSObject, ObservableObject, CLLocationManagerDelegate, AV
                     // 一般道の区間は、電波が戻ったら頼み直す(20 秒おき)
                     if case .free(let f) = kind { self.freeRequested.remove(Int(f.lowerBound)) }
                     if case .back = kind { self.say(["戻る道を探せませんでした。コースに向かってください"]) }
+                    if case .toStart(let at) = kind, !self.toStartFailSaid {
+                        self.toStartFailSaid = true
+                        self.say([at > 0 ? "コースまでの道を探せませんでした。地図の青い線に向かってください" : "スタート地点までの道を探せませんでした。地図の旗に向かってください"])
+                    }
                     return
                 }
                 let line = Navigator.line(of: route)
@@ -359,6 +393,7 @@ final class Navigator: NSObject, ObservableObject, CLLocationManagerDelegate, AV
                 switch kind {
                 case .back: intro = "コースに戻る道を案内します"
                 case .free: intro = "ここからの一般道は、アップルの経路で案内します"
+                case .toStart(let at): intro = at > 0 ? "コースまでの道を、アップルの経路で案内します" : "スタート地点までの道を、アップルの経路で案内します"
                 }
                 if let s = line.steps.first(where: { $0.kind != "arrive" }) {
                     intro += "。\(NaviSpeech.distance(max(0, s.at)))先、\(s.text)"
@@ -406,6 +441,15 @@ final class Navigator: NSObject, ObservableObject, CLLocationManagerDelegate, AV
         b.detour = detour != nil
         if let rem = engine.remaining { b.remaining = NaviSpeech.label(rem) }
         if let p = engine.progress { b.current = course.road(at: p) }
+        // コースに乗る前: スタート地点(またはコース)までの距離
+        var joinAt: Double?
+        if !engine.joined, let a = engine.approach {
+            let at = Navigator.joinTarget(course, a, location)
+            joinAt = at
+            b.remaining = NaviSpeech.label(course.length - at)
+            b.current = at > 0 ? "コースに乗ると案内を始めます" : "スタート地点から案内を始めます"
+        }
+        updateAhead(from: joinAt ?? engine.progress)
         if engine.arrived {
             b.icon = "flag.checkered"
             b.text = "目的地に着きました"
@@ -413,13 +457,44 @@ final class Navigator: NSObject, ObservableObject, CLLocationManagerDelegate, AV
             b.icon = "exclamationmark.triangle.fill"
             b.text = requesting ? "戻る道を探しています" : "コースから外れています"
             b.distance = NaviSpeech.label(engine.offDistance)
+        } else if let at = joinAt, detour == nil {
+            b.icon = "flag.fill"
+            b.text = requesting ? "道を探しています" : at > 0 ? "コースに向かってください" : "スタート地点に向かってください"
+            if let loc = location {
+                let here = GeoPoint(lat: loc.coordinate.latitude, lon: loc.coordinate.longitude)
+                b.distance = NaviSpeech.label(geoDistance(here, course.point(at: at)))
+            }
         } else if let s = e.nextStep, let d = e.distanceToNext {
             b.icon = Navigator.icon(s)
             b.distance = NaviSpeech.label(d)
-            b.text = s.kind == "arrive" ? (detour != nil ? "コースに戻る所" : "目的地") : s.text
+            var arriveText = "目的地"
+            if detour != nil {
+                if case .toStart(let at)? = detourKind { arriveText = at > 0 ? "コースに乗る所" : "スタート地点" } else { arriveText = "コースに戻る所" }
+            }
+            b.text = s.kind == "arrive" ? arriveText : s.text
             b.road = s.road
         }
         if b != banner { banner = b }
+    }
+
+    /// これから進むコースの先 3km の線。50m 以上進んだら作り直す
+    private func updateAhead(from: Double?) {
+        guard let course, let from else {
+            if !ahead.isEmpty { ahead = [] }
+            aheadFrom = nil
+            return
+        }
+        if let last = aheadFrom, abs(last - from) < 50 { return }
+        aheadFrom = from
+        var pts: [GeoPoint] = []
+        var m = from
+        let end = min(course.length, from + 3000)
+        while m < end {
+            pts.append(course.point(at: m))
+            m += 50
+        }
+        pts.append(course.point(at: end))
+        ahead = pts.count >= 2 ? pts : []
     }
 
     static func icon(_ s: NaviLine.Step) -> String {
