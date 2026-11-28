@@ -286,6 +286,19 @@ struct NaviMapView: UIViewRepresentable {
         var bearing: Double = 0
     }
 
+    /// 今の地図で 画面の 1pt が何 m か(真ん中の縦 100pt の距離から。地図が回っていても同じ)
+    static func metersPerPoint(_ map: MKMapView) -> Double? {
+        let h = map.bounds.height
+        guard h > 120 else { return nil }
+        let x = map.bounds.midX
+        let a = map.convert(CGPoint(x: x, y: h / 2 - 50), toCoordinateFrom: map)
+        let b = map.convert(CGPoint(x: x, y: h / 2 + 50), toCoordinateFrom: map)
+        guard CLLocationCoordinate2DIsValid(a), CLLocationCoordinate2DIsValid(b) else { return nil }
+        let d = CLLocation(latitude: a.latitude, longitude: a.longitude).distance(from: CLLocation(latitude: b.latitude, longitude: b.longitude))
+        guard d > 0, d.isFinite else { return nil }
+        return d / 100
+    }
+
     private static func polyline(_ pts: [GeoPoint]) -> MKPolyline {
         let coords = pts.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }
         return MKPolyline(coordinates: coords, count: coords.count)
@@ -368,18 +381,22 @@ struct NaviMapView: UIViewRepresentable {
             if let map, let loc = map.userLocation.location { follow(map, loc) }
         }
 
-        /// 進行方向を上にして、現在地を画面の少し下に置く(先が見えるように)
+        /// 進行方向を上にして、現在地を画面の少し下(上から 70%)に置く(先が見えるように)
         func follow(_ map: MKMapView, _ loc: CLLocation) {
             if loc.course >= 0 && loc.speed > 1 { lastCourse = loc.course }
             guard following, !zoom.zooming, !userIsTouching(map) else { return }
+            guard let mpp = NaviMapView.metersPerPoint(map) else { return }
             let cam = map.camera.copy() as! MKMapCamera
             cam.heading = lastCourse
             if !zoomedIn {
                 zoomedIn = true
                 cam.centerCoordinateDistance = 1200
             }
-            // 現在地より、画面の高さの 1/4 ぶん進行方向の先を真ん中にする
-            let ahead = cam.centerCoordinateDistance * 0.35
+            // 現在地を画面の真ん中より 高さの 20% 下(上から 70%)に置く。
+            // 前は「カメラの高さ × 0.35」先を真ん中にしていたが、MapKit の縦の見える幅は高さの 0.5 倍ほどしかなく、
+            // 現在地が画面の下の外に出ていた。実際の地図の縮尺(1pt が何 m か)を測って決める
+            let scale = map.camera.centerCoordinateDistance > 0 ? cam.centerCoordinateDistance / map.camera.centerCoordinateDistance : 1
+            let ahead = map.bounds.height * 0.2 * mpp * scale
             let r = lastCourse * .pi / 180
             let lat = loc.coordinate.latitude + ahead * cos(r) / 110_950
             let lon = loc.coordinate.longitude + ahead * sin(r) / (111_320 * cos(loc.coordinate.latitude * .pi / 180))
